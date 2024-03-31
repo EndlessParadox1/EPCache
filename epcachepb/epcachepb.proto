@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package gencachepb;
+
+option go_package = "github.com/EndlessParadox1/epcache/epcachepb";
+
+message Request {
+    string group = 1;
+    string key = 2;
+}
+
+message Response {
+    bytes value = 1;
+}
+
+// In this dir, use `protoc --go_out=. --go_opt=paths=source_relative *.proto` to generate *.pb.go
