@@ -69,10 +69,10 @@ func TestEvict(t *testing.T) {
 	if len(evictedKeys) != 2 {
 		t.Fatalf("got %d evicted keys; want 2", len(evictedKeys))
 	}
-	if evictedKeys[0] != any("myKey0") {
+	if evictedKeys[0] != "myKey0" {
 		t.Fatalf("got %v in first evicted key; want %s", evictedKeys[0], "myKey0")
 	}
-	if evictedKeys[1] != any("myKey1") {
+	if evictedKeys[1] != "myKey1" {
 		t.Fatalf("got %v in second evicted key; want %s", evictedKeys[1], "myKey1")
 	}
 }
