@@ -1,6 +1,6 @@
 # EPCache
 
-> Just a distributed cache implemented by go.
+> A distributed cache implemented by go.
 
 ## Structure
 ```

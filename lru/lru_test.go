@@ -1,52 +1,78 @@
 package lru
 
 import (
-	"reflect"
+	"fmt"
 	"testing"
 )
 
-type String string
+type simpleStruct struct {
+	int
+	string
+}
 
-func (s String) Len() int {
-	return len(s)
+type complexStruct struct {
+	int
+	simpleStruct
+}
+
+var Tests = []struct {
+	name       string
+	keyToAdd   any
+	keyToGet   any
+	expectedOk bool
+}{
+	{"string_hit", "myKey", "myKey", true},
+	{"string_miss", "myKey", "nonsense", false},
+	{"simple_struct_hit", simpleStruct{1, "two"}, simpleStruct{1, "two"}, true},
+	{"simple_struct_miss", simpleStruct{1, "two"}, simpleStruct{0, "noway"}, false},
+	{"complex_struct_hit", complexStruct{1, simpleStruct{2, "three"}},
+		complexStruct{1, simpleStruct{2, "three"}}, true},
 }
 
 func TestGet(t *testing.T) {
-	lru := New(int64(0), nil)
-	lru.Add("key1", String("val1"))
-	if v, ok := lru.Get("key1"); !ok || string(v.(String)) != "val1" {
-		t.Fatal("cache hit key1=val1 failed")
-	}
-	if _, ok := lru.Get("key2"); ok {
-		t.Fatal("cache miss key2 failed")
-	}
-}
-
-func TestRemoveOldest(t *testing.T) {
-	k1, k2, k3 := "key1", "key2", "key3"
-	v1, v2, v3 := "value1", "value2", "value3"
-	cap_ := len(k1 + k2 + v1 + v2)
-	lru := New(int64(cap_), nil)
-	lru.Add(k1, String(v1))
-	lru.Add(k2, String(v2))
-	lru.Add(k3, String(v3))
-	if _, ok := lru.Get("key1"); ok || lru.Len() != 2 {
-		t.Fatal("RemoveOldest key1 failed")
+	for _, tt := range Tests {
+		lru := New(0)
+		lru.Add(tt.keyToAdd, 1234)
+		val, ok := lru.Get(tt.keyToGet)
+		if ok != tt.expectedOk {
+			t.Fatalf("%s: cache hit = %v; want %v", tt.name, ok, !ok)
+		} else if ok && val != 1234 {
+			t.Fatalf("%s expected 1234 but got %v", tt.name, val)
+		}
 	}
 }
 
-func TestOnEvicted(t *testing.T) {
-	var keys []string
-	callback := func(key string, _ Value) {
-		keys = append(keys, key)
+func TestRemove(t *testing.T) {
+	lru := New(0)
+	lru.Add("myKey", 1234)
+	if val, ok := lru.Get("myKey"); !ok {
+		t.Fatal("TestRemove returned no match")
+	} else if val != 1234 {
+		t.Fatalf("TestRemove failed. Expected %d, got %v", 1234, val)
 	}
-	lru := New(int64(10), callback)
-	lru.Add("k1", String("v1"))
-	lru.Add("k2", String("v2"))
-	lru.Add("k3", String("v3"))
-	lru.Add("k4", String("v4"))
-	expect := []string{"k1", "k2"}
-	if !reflect.DeepEqual(expect, keys) {
-		t.Fatalf("Call OnEvicted failed, expect keys equals to %s", expect)
+	lru.Remove("myKey")
+	if _, ok := lru.Get("myKey"); ok {
+		t.Fatal("TestRemove returned a removed entry")
+	}
+}
+
+func TestEvict(t *testing.T) {
+	var evictedKeys []any
+	onEvictedFunc := func(key any, _ any) {
+		evictedKeys = append(evictedKeys, key)
+	}
+	lru := New(20)
+	lru.OnEvicted = onEvictedFunc
+	for i := 0; i < 22; i++ {
+		lru.Add(fmt.Sprintf("myKey%d", i), 1234)
+	}
+	if len(evictedKeys) != 2 {
+		t.Fatalf("got %d evicted keys; want 2", len(evictedKeys))
+	}
+	if evictedKeys[0] != any("myKey0") {
+		t.Fatalf("got %v in first evicted key; want %s", evictedKeys[0], "myKey0")
+	}
+	if evictedKeys[1] != any("myKey1") {
+		t.Fatalf("got %v in second evicted key; want %s", evictedKeys[1], "myKey1")
 	}
 }

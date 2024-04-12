@@ -13,4 +13,8 @@ message Response {
     bytes value = 1;
 }
 
+service EPCache {
+    rpc Get(Request) returns (Response) {};
+}
+
 // In this dir, use `protoc --go_out=. --go_opt=paths=source_relative *.proto` to generate *.pb.go

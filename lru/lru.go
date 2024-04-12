@@ -1,76 +1,97 @@
+// Package lru implements a lru cache.
 package lru
 
-import (
-	"container/list"
-	"sync"
-)
+import "container/list"
 
 type Cache struct {
-	maxBytes int64 // 0 for infinity
-	nbytes   int64
-	ll       *list.List
-	cache    sync.Map
-	// optional and executed when an entry is purged
-	OnEvicted func(key string, value Value)
+	maxEntries int // 0 for no limit
+	ll         *list.List
+	cache      map[any]*list.Element
+	// OnEvicted optionally specify a callback func to be executed when an entry is purged.
+	OnEvicted func(key any, value any)
 }
 
 type entry struct {
-	key   string
-	value Value
+	key   any
+	value any
 }
 
-type Value interface {
-	Len() int
-}
-
-func New(maxBytes int64, OnEvicted func(string, Value)) *Cache {
+func New(maxEntries int) *Cache {
 	return &Cache{
-		maxBytes:  maxBytes,
-		ll:        list.New(),
-		OnEvicted: OnEvicted,
+		maxEntries: maxEntries,
+		ll:         list.New(),
+		cache:      make(map[any]*list.Element),
 	}
 }
 
-func (c *Cache) Get(key string) (value Value, ok bool) {
-	if val, ok_ := c.cache.Load(key); ok_ {
-		ele := val.(*list.Element)
+// Add adds or just updates an entry.
+func (c *Cache) Add(key any, value any) {
+	if c.cache == nil {
+		c.cache = make(map[any]*list.Element)
+		c.ll = list.New()
+	}
+	if ele, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ele)
-		kv := ele.Value.(*entry)
-		return kv.value, true
+		ele.Value.(*entry).value = value
+		return
+	}
+	ele := c.ll.PushFront(&entry{key, value})
+	c.cache[key] = ele
+	if c.maxEntries != 0 && c.ll.Len() > c.maxEntries {
+		c.RemoveOldest()
+	}
+}
+
+func (c *Cache) Get(key any) (value any, ok bool) {
+	if c.cache == nil {
+		return
+	}
+	if ele, hit := c.cache[key]; hit {
+		c.ll.MoveToFront(ele)
+		return ele.Value.(*entry).value, true
 	}
 	return
+}
+
+func (c *Cache) Remove(key any) {
+	if c.cache == nil {
+		return
+	}
+	if ele, ok := c.cache[key]; ok {
+		c.removeElement(ele)
+	}
 }
 
 func (c *Cache) RemoveOldest() {
 	ele := c.ll.Back()
 	if ele != nil {
-		kv := c.ll.Remove(ele).(*entry)
-		c.cache.Delete(kv.key)
-		c.nbytes -= int64(len(kv.key)) + int64(kv.value.Len())
-		if c.OnEvicted != nil {
-			c.OnEvicted(kv.key, kv.value)
-		}
+		c.removeElement(ele)
 	}
 }
 
-// Add new or update element
-func (c *Cache) Add(key string, value Value) {
-	if val, ok := c.cache.Load(key); ok {
-		ele := val.(*list.Element)
-		c.ll.MoveToFront(ele)
-		kv := ele.Value.(*entry)
-		c.nbytes += int64(value.Len()) - int64(kv.value.Len())
-		kv.value = value
-	} else {
-		ele := c.ll.PushFront(&entry{key, value})
-		c.cache.Store(key, ele)
-		c.nbytes += int64(len(key)) + int64(value.Len())
-	}
-	for c.maxBytes != 0 && c.nbytes > c.maxBytes {
-		c.RemoveOldest()
+func (c *Cache) removeElement(ele *list.Element) {
+	kv := c.ll.Remove(ele).(*entry)
+	delete(c.cache, kv.key)
+	if c.OnEvicted != nil {
+		c.OnEvicted(kv.key, kv.value)
 	}
 }
 
 func (c *Cache) Len() int {
+	if c.cache == nil {
+		return 0
+	}
 	return c.ll.Len()
+}
+
+// Clear purges all entries.
+func (c *Cache) Clear() {
+	if c.OnEvicted != nil {
+		for _, ele := range c.cache {
+			kv := ele.Value.(*entry)
+			c.OnEvicted(kv.key, kv.value)
+		}
+	}
+	c.cache = nil
+	c.ll = nil
 }

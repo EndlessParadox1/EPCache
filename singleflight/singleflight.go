@@ -1,8 +1,9 @@
+// Package singleflight provides a duplicate func call suppression mechanism.
 package singleflight
 
 import "sync"
 
-// call represents a req for peer, with val and err carrying the res
+// call represents a req for peer, with val and err carrying the ret.
 type call struct {
 	wg  sync.WaitGroup
 	val any
@@ -11,7 +12,7 @@ type call struct {
 
 type Group struct {
 	mu sync.Mutex
-	m  map[string]*call // map specific key to a call
+	m  map[string]*call // map a key to a call
 }
 
 func (g *Group) Do(key string, fn func() (any, error)) (any, error) {

@@ -1,3 +1,4 @@
+// Package consistenthash implements a ring hash.
 package consistenthash
 
 import (
@@ -27,6 +28,10 @@ func New(replicas int, hash Hash) *Map {
 	return m
 }
 
+func (m *Map) IsEmpty() bool {
+	return len(m.keys) == 0
+}
+
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
 		for i := 0; i < m.replicas; i++ {
@@ -39,13 +44,14 @@ func (m *Map) Add(keys ...string) {
 }
 
 func (m *Map) Get(key string) string {
-	if len(m.keys) == 0 {
+	if m.IsEmpty() {
 		return ""
 	}
 	hash := int(m.hash([]byte(key)))
+	// To find out the smallest i in range [0, n) that satisfy the func, if not existed just return n.
 	idx := sort.Search(len(m.keys), func(i int) bool {
 		return m.keys[i] >= hash
-	}) // to find out the smallest i in range [0, n) that satisfy f, if not existed just return n
+	})
 	if idx == len(m.keys) {
 		idx = 0
 	}
