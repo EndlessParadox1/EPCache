@@ -2,34 +2,61 @@
 package epcache
 
 import (
-	"fmt"
-	"log"
+	"context"
 	"sync"
+	"sync/atomic"
 
-	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/singleflight"
 )
 
-// Getter loads data for a key
+// Getter loads data from source, like a DB.
 type Getter interface {
-	// Get depends on users' concrete implementation
-	Get(key string) ([]byte, error)
+	// Get depends on users' concrete implementation.
+	Get(ctx context.Context, key string) ([]byte, error)
 }
 
-// GetterFunc indicates Getter might just be a func
-type GetterFunc func(key string) ([]byte, error)
+// GetterFunc indicates Getter might just be a func.
+type GetterFunc func(ctx context.Context, key string) ([]byte, error)
 
-func (f GetterFunc) Get(key string) ([]byte, error) {
-	return f(key)
+func (f GetterFunc) Get(ctx context.Context, key string) ([]byte, error) {
+	return f(ctx, key)
+}
+
+var (
+	mu     sync.RWMutex
+	groups = make(map[string]*Group)
+)
+
+func NewGroup(name string, cacheBytes int, getter Getter) *Group {
+	if getter == nil {
+		panic("nil Getter")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	g := &Group{
+		name:       name,
+		loader:     &singleflight.Group{},
+		getter:     getter,
+		cacheBytes: cacheBytes,
+	}
+	groups[name] = g
+	return g
+}
+
+func GetGroup(name string) *Group {
+	mu.RLock()
+	defer mu.RUnlock()
+	g := groups[name]
+	return g
 }
 
 // Group is a set of associated data spreading over one or more processes.
 type Group struct {
 	name       string
-	getter     Getter
 	peersOnce  sync.Once
 	peers      PeerPiker
 	loader     *singleflight.Group
+	getter     Getter
 	cacheBytes int // limit for sum of mainCache's and hotCache's size
 
 	// mainCache contains data for which this process is authoritative.
@@ -38,97 +65,99 @@ type Group struct {
 	// aiming to reduce the network IO overhead.
 	hotCache cache
 
-	//Stats    Stats
+	Stats Stats
 }
 
-var (
-	mu     sync.RWMutex
-	groups = make(map[string]*Group)
-)
-
-func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
-	if getter == nil {
-		panic("nil getter")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	g := &Group{
-		name:      name,
-		getter:    getter,
-		mainCache: cache{},
-		loader:    &singleflight.Group{},
-	}
-	groups[name] = g
-	return g
+// Stats are statistics for group.
+type Stats struct {
+	Gets          atomic.Int64
+	Hits          atomic.Int64
+	Loads         atomic.Int64
+	LoadsDeduped  atomic.Int64 // after singleflight
+	LocalLoads    atomic.Int64
+	LocalLoadErrs atomic.Int64
+	PeerLoads     atomic.Int64
+	PeerLoadErrs  atomic.Int64
+	PeerReqs      atomic.Int64 // requests from peers TODO
 }
 
-func GetGroup(name string) *Group {
-	mu.RLock()
-	g := groups[name]
-	mu.RUnlock()
-	return g
+func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
+	g.Stats.Gets.Add(1)
+	value, hit := g.lookupCache(key)
+	if hit {
+		g.Stats.Hits.Add(1)
+		return value, nil
+	}
+	return g.load(ctx, key)
 }
 
-func (g *Group) RegisterPeers(peers PeerPiker) {
-	if g.peers != nil {
-		panic("register peers once again")
-	}
-	g.peers = peers
-}
-
-func (g *Group) Get(key string) (ByteView, error) {
-	if key == "" {
-		return ByteView{}, fmt.Errorf("key is required")
-	}
-	if v, ok := g.mainCache.get(key); ok {
-		log.Println("[GenCache] hit")
-		return v, nil
-	}
-	return g.load(key)
-}
-
-func (g *Group) load(key string) (ByteView, error) {
-	view, err := g.loader.Do(key, func() (any, error) {
-		if g.peers != nil {
-			if peer, ok := g.peers.PickPeer(key); ok {
-				if view_, err_ := g.getFromPeer(peer, key); err_ == nil {
-					return view_, nil
-				} else {
-					log.Println("[GenCache] failed to get from peer:", err_)
-				}
-			}
+func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
+	g.Stats.Loads.Add(1)
+	val, err := g.loader.Do(key, func() (any, error) {
+		// singleflight only works on overlapping concurrent reqs,
+		// so just lookup cache again before trying to load data from local or remote.
+		if val, hit := g.lookupCache(key); hit {
+			g.Stats.Hits.Add(1)
+			return val, nil
 		}
-		return g.getLocally(key)
+		g.Stats.LoadsDeduped.Add(1)
+		if peer, ok := g.peers.PickPeer(key); ok {
+			val, err := g.getFromPeer(ctx, peer, key)
+			if err == nil {
+				g.Stats.PeerLoads.Add(1)
+				return val, nil
+			}
+			g.Stats.PeerLoadErrs.Add(1)
+		}
+		val, err := g.getLocally(ctx, key)
+		if err != nil {
+			g.Stats.LocalLoadErrs.Add(1)
+			return nil, err
+		}
+		g.Stats.LocalLoads.Add(1)
+		g.populateCache(key, val, &g.mainCache)
+		return val, nil
 	})
-	if err == nil {
-		return view.(ByteView), nil
-	}
-	return ByteView{}, err
-}
-
-func (g *Group) getLocally(key string) (ByteView, error) {
-	bytes, err := g.getter.Get(key)
 	if err != nil {
 		return ByteView{}, err
 	}
-	value := ByteView{cloneBytes(bytes)}
-	g.populateCache(key, value)
-	return value, nil
+	return val.(ByteView), nil
 }
 
-func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-	req := &pb.Request{
-		Group: g.name,
-		Key:   key,
-	}
-	res := &pb.Response{}
-	err := peer.Get(req, res)
+func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
+	val, err := g.getter.Get(ctx, key)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{res.GetValue()}, nil
+	return ByteView{val}, nil
 }
 
-func (g *Group) populateCache(key string, value ByteView) {
-	g.mainCache.add(key, value)
+func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
+	// TODO
+	return ByteView{}, nil
+}
+
+func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
+	value, ok = g.mainCache.get(key)
+	if ok {
+		return
+	}
+	value, ok = g.hotCache.get(key)
+	return
+}
+
+func (g *Group) populateCache(key string, value ByteView, cache *cache) {
+	cache.add(key, value)
+	for {
+		mainBytes := g.mainCache.bytes()
+		hotBytes := g.hotCache.bytes()
+		if mainBytes+hotBytes <= g.cacheBytes {
+			break
+		}
+		victim := &g.mainCache
+		if hotBytes > mainBytes/8 {
+			victim = &g.hotCache
+		}
+		victim.removeOldest()
+	}
 }

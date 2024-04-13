@@ -67,6 +67,12 @@ func (c *cache) removeOldest() {
 	c.lru.RemoveOldest()
 }
 
+func (c *cache) bytes() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nbytes
+}
+
 func (c *cache) items() int {
 	if c.lru == nil {
 		return 0
