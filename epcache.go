@@ -1,3 +1,4 @@
+// Package epcache implements a distributed cache system.
 package epcache
 
 import (
@@ -9,22 +10,35 @@ import (
 	"github.com/EndlessParadox1/epcache/singleflight"
 )
 
+// Getter loads data for a key
 type Getter interface {
+	// Get depends on users' concrete implementation
 	Get(key string) ([]byte, error)
 }
 
+// GetterFunc indicates Getter might just be a func
 type GetterFunc func(key string) ([]byte, error)
 
 func (f GetterFunc) Get(key string) ([]byte, error) {
 	return f(key)
 }
 
+// Group is a set of associated data spreading over one or more processes.
 type Group struct {
-	name      string
-	getter    Getter
+	name       string
+	getter     Getter
+	peersOnce  sync.Once
+	peers      PeerPiker
+	loader     *singleflight.Group
+	cacheBytes int // limit for sum of mainCache's and hotCache's size
+
+	// mainCache contains data for which this process is authoritative.
 	mainCache cache
-	peers     PeerPiker
-	loader    *singleflight.Group
+	// hotCache contains data for which other processes are authoritative,
+	// aiming to reduce the network IO overhead.
+	hotCache cache
+
+	//Stats    Stats
 }
 
 var (
@@ -41,7 +55,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	g := &Group{
 		name:      name,
 		getter:    getter,
-		mainCache: cache{cacheBytes: cacheBytes},
+		mainCache: cache{},
 		loader:    &singleflight.Group{},
 	}
 	groups[name] = g

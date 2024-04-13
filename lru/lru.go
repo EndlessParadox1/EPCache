@@ -42,12 +42,6 @@ func (c *Cache) Get(key string) (value any, ok bool) {
 	return
 }
 
-//func (c *Cache) Remove(key any) {
-//	if ele, ok := c.cache[key]; ok {
-//		c.removeElement(ele)
-//	}
-//} TODO
-
 func (c *Cache) RemoveOldest() {
 	ele := c.ll.Back()
 	if ele != nil {
