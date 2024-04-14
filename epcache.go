@@ -81,6 +81,10 @@ type Stats struct {
 	PeerReqs      atomic.Int64 // requests from peers TODO
 }
 
+func (g *Group) Name() string {
+	return g.name
+}
+
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	g.Stats.Gets.Add(1)
 	value, hit := g.lookupCache(key)
@@ -134,7 +138,6 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 
 func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
 	// TODO
-	return ByteView{}, nil
 }
 
 func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
@@ -154,10 +157,29 @@ func (g *Group) populateCache(key string, value ByteView, cache *cache) {
 		if mainBytes+hotBytes <= g.cacheBytes {
 			break
 		}
+		// A magical strategy proven to be effective
 		victim := &g.mainCache
 		if hotBytes > mainBytes/8 {
 			victim = &g.hotCache
 		}
 		victim.removeOldest()
+	}
+}
+
+type CacheType int
+
+const (
+	MainCache CacheType = iota + 1
+	HotCache
+)
+
+func (g *Group) CacheStats(ctype CacheType) CacheStats {
+	switch ctype {
+	case MainCache:
+		return g.mainCache.stats()
+	case HotCache:
+		return g.hotCache.stats()
+	default:
+		return CacheStats{}
 	}
 }
