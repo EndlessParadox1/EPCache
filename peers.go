@@ -8,7 +8,7 @@ import (
 
 // PeerGetter loads data from remote using gRPC.
 type PeerGetter interface {
-	Get(ctx context.Context, in *pb.Request, out *pb.Response) error
+	Get(ctx context.Context, in *pb.Request) (*pb.Response, error)
 }
 
 type PeerPiker interface {

@@ -106,9 +106,9 @@ func (g *Group) Name() string {
 	return g.name
 }
 
-func (g *Group) RegisterPeerPiker(peers PeerPiker) {
+func (g *Group) RegisterPeers(peers PeerPiker) {
 	if g.peers != nil {
-		panic("RegisterPeerPiker called more than once")
+		panic("RegisterPeers called more than once")
 	}
 	if peers == nil {
 		g.peers = NoPeer{}
@@ -173,8 +173,7 @@ func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (B
 		Group: g.name,
 		Key:   key,
 	}
-	res := &pb.Response{}
-	err := peer.Get(ctx, req, res)
+	res, err := peer.Get(ctx, req)
 	if err != nil {
 		return ByteView{}, err
 	}
