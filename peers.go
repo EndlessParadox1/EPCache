@@ -12,6 +12,7 @@ type PeerGetter interface {
 }
 
 type PeerPiker interface {
+	// PickPeer picks peer according to the key.
 	PickPeer(key string) (PeerGetter, bool)
 }
 

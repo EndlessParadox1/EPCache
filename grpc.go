@@ -33,9 +33,9 @@ func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, e
 type GrpcPool struct {
 	self         string
 	opts         GrpcPoolOptions
-	mu           sync.RWMutex
+	mu           sync.RWMutex // guards peers and protoGetters
 	peers        *consistenthash.Map
-	protoGetters map[string]*protoGetter // key like 'localhost:8080'
+	protoGetters map[string]*protoGetter // keys like "localhost:8080"
 
 	pb.UnimplementedEPCacheServer
 }
@@ -45,7 +45,13 @@ type GrpcPoolOptions struct {
 	HashFn   consistenthash.Hash
 }
 
+var grpcPoolExist bool // TODO
+
 func NewGrpcPool(self string, opts *GrpcPoolOptions) *GrpcPool {
+	if grpcPoolExist {
+		panic("NewGrpcPool called more than once")
+	}
+	grpcPoolExist = true
 	gp := &GrpcPool{
 		self: self,
 	}
@@ -58,11 +64,12 @@ func NewGrpcPool(self string, opts *GrpcPoolOptions) *GrpcPool {
 	return gp
 }
 
-// Set reset the pool's list of peers, including self
+// Set sets or resets the pool's list of peers, always including itself.
 func (gp *GrpcPool) Set(peers ...string) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
+	gp.peers.Add(gp.self)
 	gp.peers.Add(peers...)
 	gp.protoGetters = make(map[string]*protoGetter)
 	for _, peer := range peers {
@@ -70,18 +77,19 @@ func (gp *GrpcPool) Set(peers ...string) {
 	}
 }
 
-// PickPeer picks a peer according to the key.
 func (gp *GrpcPool) PickPeer(key string) (PeerGetter, bool) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
-	if gp.peers.IsEmpty() {
+	if gp.peers == nil {
 		return nil, false
 	}
-	if peer := gp.peers.Get(key); peer != "" && peer != gp.self {
+	if peer := gp.peers.Get(key); peer != gp.self {
 		return gp.protoGetters[peer], true
 	}
 	return nil, false
 }
+
+// Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
 	groupName := in.GetGroup()
