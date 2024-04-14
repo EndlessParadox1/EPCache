@@ -45,7 +45,7 @@ type GrpcPoolOptions struct {
 	HashFn   consistenthash.Hash
 }
 
-var grpcPoolExist bool // TODO
+var grpcPoolExist bool
 
 func NewGrpcPool(self string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
