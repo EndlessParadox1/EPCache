@@ -45,15 +45,11 @@ func (c *Cache) Get(key string) (value any, ok bool) {
 func (c *Cache) RemoveOldest() {
 	ele := c.ll.Back()
 	if ele != nil {
-		c.removeElement(ele)
-	}
-}
-
-func (c *Cache) removeElement(ele *list.Element) {
-	kv := c.ll.Remove(ele).(*entry)
-	delete(c.cache, kv.key)
-	if c.OnEvicted != nil {
-		c.OnEvicted(kv.key, kv.value)
+		kv := c.ll.Remove(ele).(*entry)
+		delete(c.cache, kv.key)
+		if c.OnEvicted != nil {
+			c.OnEvicted(kv.key, kv.value)
+		}
 	}
 }
 

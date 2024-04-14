@@ -3,11 +3,18 @@ package epcache
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/singleflight"
 )
+
+func init() {
+	rand.NewSource(time.Now().UnixNano())
+}
 
 // Getter loads data from source, like a DB.
 type Getter interface {
@@ -23,8 +30,9 @@ func (f GetterFunc) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 var (
-	mu     sync.RWMutex
-	groups = make(map[string]*Group)
+	mu        sync.RWMutex
+	groups    = make(map[string]*Group)
+	groupHook func(*Group)
 )
 
 func NewGroup(name string, cacheBytes int, getter Getter) *Group {
@@ -33,11 +41,17 @@ func NewGroup(name string, cacheBytes int, getter Getter) *Group {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	if _, dup := groups[name]; dup {
+		panic("duplicate registration of group: " + name)
+	}
 	g := &Group{
 		name:       name,
 		loader:     &singleflight.Group{},
 		getter:     getter,
 		cacheBytes: cacheBytes,
+	}
+	if groupHook != nil {
+		groupHook(g)
 	}
 	groups[name] = g
 	return g
@@ -48,6 +62,13 @@ func GetGroup(name string) *Group {
 	defer mu.RUnlock()
 	g := groups[name]
 	return g
+}
+
+func RegisterGroupHook(fn func(*Group)) {
+	if groupHook != nil {
+		panic("RegisterGroupHook called more than once")
+	}
+	groupHook = fn
 }
 
 // Group is a set of associated data spreading over one or more processes.
@@ -83,6 +104,17 @@ type Stats struct {
 
 func (g *Group) Name() string {
 	return g.name
+}
+
+func (g *Group) RegisterPeerPiker(peers PeerPiker) {
+	if g.peers != nil {
+		panic("RegisterPeerPiker called more than once")
+	}
+	if peers == nil {
+		g.peers = NoPeer{}
+	} else {
+		g.peers = peers
+	}
 }
 
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
@@ -129,15 +161,28 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 }
 
 func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
-	val, err := g.getter.Get(ctx, key)
+	bytes, err := g.getter.Get(ctx, key)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{val}, nil
+	return ByteView{cloneBytes(bytes)}, nil
 }
 
 func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
-	// TODO
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	res := &pb.Response{}
+	err := peer.Get(ctx, req, res)
+	if err != nil {
+		return ByteView{}, err
+	}
+	value := ByteView{res.GetValue()}
+	if rand.Intn(10) == 0 {
+		g.populateCache(key, value, &g.hotCache)
+	}
+	return value, nil
 }
 
 func (g *Group) lookupCache(key string) (value ByteView, ok bool) {

@@ -18,7 +18,7 @@ func TestDo(t *testing.T) {
 		t.Errorf("Do returns %v; want %v", got, want)
 	}
 	if err != nil {
-		t.Errorf("Do returns error %v", err)
+		t.Errorf("Do returns error: %v", err)
 	}
 }
 
@@ -29,7 +29,7 @@ func TestDoErr(t *testing.T) {
 		return nil, someErr
 	})
 	if !errors.Is(err, someErr) {
-		t.Errorf("Do returns error %v; want someErr", err)
+		t.Errorf("Do returns error: %v; want someErr", err)
 	}
 	if v != nil {
 		t.Errorf("unexpected non-nil value %#v", v)
@@ -50,7 +50,7 @@ func TestDoDupSuppress(t *testing.T) {
 		go func() {
 			v, err := g.Do("key", fn)
 			if err != nil {
-				t.Errorf("Do returns error %v", err)
+				t.Errorf("Do returns error: %v", err)
 			}
 			if v != "bar" {
 				t.Errorf("got %q; want %q", v, "bar")

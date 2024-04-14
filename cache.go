@@ -1,8 +1,9 @@
 package epcache
 
 import (
-	"github.com/EndlessParadox1/epcache/lru"
 	"sync"
+
+	"github.com/EndlessParadox1/epcache/lru"
 )
 
 type cache struct {
