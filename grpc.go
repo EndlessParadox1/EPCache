@@ -3,24 +3,25 @@ package epcache
 import (
 	"context"
 	"errors"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"sync"
 
 	"github.com/EndlessParadox1/epcache/consistenthash"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const defaultReplicas = 50
 
+// protoGetter implements PeerGetter with gRPC
 type protoGetter struct {
 	addr string
 }
 
 func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
-	conn, err := grpc.NewClient(pg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(pg.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
 	if err != nil {
 		return nil, err
 	}
@@ -31,23 +32,37 @@ func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, e
 
 type GrpcPool struct {
 	self         string
+	opts         GrpcPoolOptions
 	mu           sync.RWMutex
 	peers        *consistenthash.Map
-	protoGetters map[string]*protoGetter // key like 'http://192.168.0.3:8080'
+	protoGetters map[string]*protoGetter // key like 'localhost:8080'
+
 	pb.UnimplementedEPCacheServer
 }
 
-func NewGrpcPool(self string) *GrpcPool {
-	return &GrpcPool{
+type GrpcPoolOptions struct {
+	Replicas int
+	HashFn   consistenthash.Hash
+}
+
+func NewGrpcPool(self string, opts *GrpcPoolOptions) *GrpcPool {
+	gp := &GrpcPool{
 		self: self,
 	}
+	if opts != nil {
+		gp.opts = *opts
+	}
+	if gp.opts.Replicas == 0 {
+		gp.opts.Replicas = defaultReplicas
+	}
+	return gp
 }
 
 // Set reset the pool's list of peers, including self
 func (gp *GrpcPool) Set(peers ...string) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	gp.peers = consistenthash.New(defaultReplicas, nil)
+	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
 	gp.peers.Add(peers...)
 	gp.protoGetters = make(map[string]*protoGetter)
 	for _, peer := range peers {
@@ -55,10 +70,13 @@ func (gp *GrpcPool) Set(peers ...string) {
 	}
 }
 
-// PickPeer picks a peer according to the key
+// PickPeer picks a peer according to the key.
 func (gp *GrpcPool) PickPeer(key string) (PeerGetter, bool) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
+	if gp.peers.IsEmpty() {
+		return nil, false
+	}
 	if peer := gp.peers.Get(key); peer != "" && peer != gp.self {
 		return gp.protoGetters[peer], true
 	}
