@@ -11,12 +11,12 @@ type PeerGetter interface {
 	Get(ctx context.Context, in *pb.Request) (*pb.Response, error)
 }
 
-type PeerPiker interface {
+type PeerPicker interface {
 	// PickPeer picks peer according to the key.
 	PickPeer(key string) (PeerGetter, bool)
 }
 
-// NoPeer is an implementation of PeerPicker, used for processes in standalone mode.
+// NoPeer is an implementation of PeerPicker, used for groups running in standalone mode.
 type NoPeer struct{}
 
 func (NoPeer) PickPeer(_ string) (peer PeerGetter, ok bool) {

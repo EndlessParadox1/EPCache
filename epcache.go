@@ -64,6 +64,7 @@ func GetGroup(name string) *Group {
 	return g
 }
 
+// RegisterGroupHook sets func that will be executed each time a group is created.
 func RegisterGroupHook(fn func(*Group)) {
 	if groupHook != nil {
 		panic("RegisterGroupHook called more than once")
@@ -74,8 +75,7 @@ func RegisterGroupHook(fn func(*Group)) {
 // Group is a set of associated data spreading over one or more processes.
 type Group struct {
 	name       string
-	peersOnce  sync.Once
-	peers      PeerPiker
+	peers      PeerPicker
 	loader     *singleflight.Group
 	getter     Getter
 	cacheBytes int // limit for sum of mainCache's and hotCache's size
@@ -99,14 +99,16 @@ type Stats struct {
 	LocalLoadErrs atomic.Int64
 	PeerLoads     atomic.Int64
 	PeerLoadErrs  atomic.Int64
-	PeerReqs      atomic.Int64 // requests from peers TODO
+	PeerReqs      atomic.Int64 // requests from peers
 }
 
 func (g *Group) Name() string {
 	return g.name
 }
 
-func (g *Group) RegisterPeers(peers PeerPiker) {
+// RegisterPeers specifies PeerPicker for a group, e.g. NoPeer, GrpcPool
+// or any that implements the PeerPicker.
+func (g *Group) RegisterPeers(peers PeerPicker) {
 	if g.peers != nil {
 		panic("RegisterPeers called more than once")
 	}
@@ -118,6 +120,9 @@ func (g *Group) RegisterPeers(peers PeerPiker) {
 }
 
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
+	if g.peers == nil {
+		panic("peers must be specified before using a group")
+	}
 	g.Stats.Gets.Add(1)
 	value, hit := g.lookupCache(key)
 	if hit {
