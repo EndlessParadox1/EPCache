@@ -3,6 +3,7 @@ package epcache
 
 import (
 	"context"
+	"github.com/EndlessParadox1/epcache/bloomfilter"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,7 @@ func NewGroup(name string, cacheBytes int, getter Getter) *Group {
 		loader:     &singleflight.Group{},
 		getter:     getter,
 		cacheBytes: cacheBytes,
+		filter:     bloomfilter.New(1000, 3),
 	}
 	if groupHook != nil {
 		groupHook(g)
@@ -86,7 +88,8 @@ type Group struct {
 	// aiming to reduce the network IO overhead.
 	hotCache cache
 
-	Stats Stats
+	filter *bloomfilter.BloomFilter
+	Stats  Stats
 }
 
 // Stats are statistics for group.

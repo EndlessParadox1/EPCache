@@ -107,15 +107,16 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return out, nil
 }
 
+// Run starts the GrpcPool as the EPCacheServer.
 func (gp *GrpcPool) Run() {
 	lis, err := net.Listen("tcp", gp.self)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
-	GrpcPool := grpc.NewServer()
-	pb.RegisterEPCacheServer(GrpcPool, gp)
-	log.Printf("GrpcPool listening at %v", lis.Addr())
-	if err_ := GrpcPool.Serve(lis); err_ != nil {
+	server := grpc.NewServer()
+	pb.RegisterEPCacheServer(server, gp)
+	log.Printf("GrpcPool listening at %v\n", lis.Addr())
+	if err_ := server.Serve(lis); err_ != nil {
 		log.Fatalf("failed to serve: %v", err_)
 	}
 }

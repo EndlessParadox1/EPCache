@@ -1,4 +1,5 @@
-// Package singleflight provides a duplicate func call suppression mechanism.
+// Package singleflight provides a duplicate func call suppression mechanism,
+// therefore avoiding cache breakdown.
 package singleflight
 
 import "sync"

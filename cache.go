@@ -54,8 +54,8 @@ func (c *cache) get(key string) (value ByteView, ok bool) {
 	if c.lru == nil {
 		return
 	}
-	val, ok := c.lru.Get(key)
-	if !ok {
+	val, ok_ := c.lru.Get(key)
+	if !ok_ {
 		return
 	}
 	c.nhit++
