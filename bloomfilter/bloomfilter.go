@@ -4,7 +4,7 @@ package bloomfilter
 import "github.com/spaolacci/murmur3"
 
 // BloomFilter works as a blacklist, so it might refuse reqs for an existing key.
-// Therefore, using it only when a group is vulnerable to attacks.
+// Therefore, using it only when a large amount of non-existent keys will come to the group.
 type BloomFilter struct {
 	size   uint32
 	bitmap []byte

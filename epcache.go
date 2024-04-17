@@ -3,6 +3,7 @@ package epcache
 
 import (
 	"context"
+	"errors"
 	"github.com/EndlessParadox1/epcache/bloomfilter"
 	"math/rand"
 	"sync"
@@ -16,6 +17,9 @@ import (
 func init() {
 	rand.NewSource(time.Now().UnixNano())
 }
+
+// ErrNotFound should be returned when Getter can't found the data.
+var ErrNotFound = errors.New("key required not found in the data source")
 
 // Getter loads data from source, like a DB.
 type Getter interface {
@@ -50,7 +54,6 @@ func NewGroup(name string, cacheBytes int, getter Getter) *Group {
 		loader:     &singleflight.Group{},
 		getter:     getter,
 		cacheBytes: cacheBytes,
-		filter:     bloomfilter.New(1000, 3),
 	}
 	if groupHook != nil {
 		groupHook(g)
@@ -122,6 +125,16 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 	}
 }
 
+// SetFilter sets or resets a bloom filter, 0 for none.
+// It calculates the required params to build a bloom filter, false positive rate of which will
+// be lower than 0.01%, according to user's expected blacklist size.
+func (g *Group) SetFilter(size uint32) {
+	if size == 0 {
+		g.filter = nil
+	}
+	g.filter = bloomfilter.New(20*size, 13)
+}
+
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	if g.peers == nil {
 		panic("peers must be specified before using a group")
@@ -132,6 +145,9 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 		g.Stats.Hits.Add(1)
 		return value, nil
 	}
+	if g.filter != nil && g.filter.MightContain(key) {
+		return ByteView{}, errors.New("forbidden key")
+	} // TODO
 	return g.load(ctx, key)
 }
 
