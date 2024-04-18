@@ -4,22 +4,29 @@ package epcache
 import (
 	"context"
 	"errors"
-	"github.com/EndlessParadox1/epcache/bloomfilter"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/EndlessParadox1/epcache/bloomfilter"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/singleflight"
+	"github.com/juju/ratelimit"
 )
 
 func init() {
 	rand.NewSource(time.Now().UnixNano())
 }
 
-// ErrNotFound should be returned when Getter can't found the data.
-var ErrNotFound = errors.New("key required not found in the data source")
+type LoadError string
+
+// ErrNotFound must be returned when Getter can't found the data.
+const ErrNotFound LoadError = "key not found in the data source"
+
+func (le LoadError) Error() string {
+	return string(le)
+}
 
 // Getter loads data from source, like a DB.
 type Getter interface {
@@ -91,8 +98,13 @@ type Group struct {
 	// aiming to reduce the network IO overhead.
 	hotCache cache
 
-	filter *bloomfilter.BloomFilter
-	Stats  Stats
+	muLimiter sync.Mutex
+	limiter   *ratelimit.Bucket
+
+	muFilter sync.RWMutex
+	filter   *bloomfilter.BloomFilter
+
+	Stats Stats
 }
 
 // Stats are statistics for group.
@@ -106,6 +118,7 @@ type Stats struct {
 	PeerLoads     atomic.Int64
 	PeerLoadErrs  atomic.Int64
 	PeerReqs      atomic.Int64 // requests from peers
+	LenBlacklist  atomic.Int64
 }
 
 func (g *Group) Name() string {
@@ -125,12 +138,22 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 	}
 }
 
+// SetLimiter TODO
+func (g *Group) SetLimiter(rate float64, cap int64) {
+	g.muLimiter.Lock()
+	defer g.muLimiter.Unlock()
+	g.limiter = ratelimit.NewBucketWithRate(rate, cap)
+}
+
 // SetFilter sets or resets a bloom filter, 0 for none.
 // It calculates the required params to build a bloom filter, false positive rate of which will
 // be lower than 0.01%, according to user's expected blacklist size.
 func (g *Group) SetFilter(size uint32) {
+	g.muFilter.Lock()
+	defer g.muFilter.Unlock()
 	if size == 0 {
 		g.filter = nil
+		g.Stats.LenBlacklist.Store(0)
 	}
 	g.filter = bloomfilter.New(20*size, 13)
 }
@@ -145,9 +168,13 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 		g.Stats.Hits.Add(1)
 		return value, nil
 	}
-	if g.filter != nil && g.filter.MightContain(key) {
-		return ByteView{}, errors.New("forbidden key")
-	} // TODO
+	if g.filter != nil {
+		g.muFilter.RLock()
+		if g.filter.MightContain(key) {
+			return ByteView{}, errors.New("forbidden key")
+		}
+		g.muFilter.RUnlock()
+	}
 	return g.load(ctx, key)
 }
 
@@ -168,6 +195,9 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 				return val, nil
 			}
 			g.Stats.PeerLoadErrs.Add(1)
+			if errors.Is(err, ErrNotFound) {
+				return nil, err
+			}
 		}
 		val, err := g.getLocally(ctx, key)
 		if err != nil {
@@ -179,6 +209,12 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 		return val, nil
 	})
 	if err != nil {
+		if g.filter != nil && errors.Is(err, ErrNotFound) {
+			g.muFilter.Lock()
+			g.filter.Add(key)
+			g.muFilter.Unlock()
+			g.Stats.LenBlacklist.Add(1)
+		}
 		return ByteView{}, err
 	}
 	return val.(ByteView), nil
