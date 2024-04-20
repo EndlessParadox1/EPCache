@@ -76,7 +76,8 @@ type Group struct {
 	// aiming to reduce the network IO overhead.
 	hotCache cache
 
-	muLimiter sync.Mutex
+	muLimiter sync.RWMutex
+	limitMode LimitMode
 	limiter   *ratelimit.Bucket
 
 	muFilter sync.RWMutex
@@ -87,6 +88,7 @@ type Group struct {
 
 // Stats are statistics for group.
 type Stats struct {
+	Accesses      atomic.Int64
 	Gets          atomic.Int64
 	Hits          atomic.Int64
 	Loads         atomic.Int64
@@ -113,17 +115,35 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 		g.peers = NoPeer{}
 	} else {
 		g.peers = peers
+		peers.addGroup(g.name)
 	}
 }
 
-// SetLimiter TODO
-func (g *Group) SetLimiter(rate float64, cap int64) {
+type LimitMode int
+
+const (
+	NoLimit = iota
+	BlockMode
+	RejectMode
+)
+
+// SetLimiter sets a rate limiter working on blocking or rejecting mode.
+func (g *Group) SetLimiter(rate float64, cap int64, mode LimitMode) {
 	g.muLimiter.Lock()
 	defer g.muLimiter.Unlock()
+	g.limitMode = mode
 	g.limiter = ratelimit.NewBucketWithRate(rate, cap)
 }
 
-// SetFilter sets or resets a bloom filter, 0 for none.
+// ResetLimiter disables a rate limiter.
+func (g *Group) ResetLimiter() {
+	g.muLimiter.Lock()
+	defer g.muLimiter.Unlock()
+	g.limitMode = NoLimit
+	g.limiter = nil
+}
+
+// SetFilter sets a bloom filter, zero size for none.
 // It calculates the required params to build a bloom filter, false positive rate of which will
 // be lower than 0.01%, according to user's expected blacklist size.
 func (g *Group) SetFilter(size uint32) {
@@ -140,6 +160,18 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	if g.peers == nil {
 		panic("peers must be specified before using a group")
 	}
+	g.Stats.Accesses.Add(1)
+	g.muLimiter.RLock()
+	switch g.limitMode {
+	case NoLimit:
+	case BlockMode:
+		g.limiter.Wait(1)
+	case RejectMode:
+		if g.limiter.TakeAvailable(1) == 0 {
+			return ByteView{}, errors.New("access restricted")
+		}
+	}
+	g.muLimiter.RUnlock()
 	g.Stats.Gets.Add(1)
 	value, hit := g.lookupCache(key)
 	if hit {
@@ -166,7 +198,7 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 			return val, nil
 		}
 		g.Stats.LoadsDeduped.Add(1)
-		if peer, ok := g.peers.PickPeer(key); ok {
+		if peer, ok := g.peers.pickPeer(key); ok {
 			val, err := g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
@@ -206,12 +238,12 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 	return ByteView{cloneBytes(bytes)}, nil
 }
 
-func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
+func (g *Group) getFromPeer(ctx context.Context, peer peerGetter, key string) (ByteView, error) {
 	req := &pb.Request{
 		Group: g.name,
 		Key:   key,
 	}
-	res, err := peer.Get(ctx, req)
+	res, err := peer.get(ctx, req)
 	if err != nil {
 		return ByteView{}, err
 	}

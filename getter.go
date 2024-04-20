@@ -5,7 +5,7 @@ import "context"
 type LoadError string
 
 // ErrNotFound must be returned when Getter can't found the data.
-const ErrNotFound LoadError = "key not found in the data source"
+const ErrNotFound LoadError = "key not found in data source"
 
 func (le LoadError) Error() string {
 	return string(le)

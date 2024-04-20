@@ -7,7 +7,7 @@ type Cache struct {
 	ll    *list.List
 	cache map[any]*list.Element
 	// OnEvicted optionally specify a callback func to be executed when an entry is purged.
-	OnEvicted func(key string, value any)
+	onEvicted func(key string, value any)
 }
 
 type entry struct {
@@ -19,11 +19,10 @@ func New(onEvicted func(string, any)) *Cache {
 	return &Cache{
 		ll:        list.New(),
 		cache:     make(map[any]*list.Element),
-		OnEvicted: onEvicted,
+		onEvicted: onEvicted,
 	}
 }
 
-// Add adds an entry.
 func (c *Cache) Add(key string, value any) {
 	if ele, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ele)
@@ -47,8 +46,8 @@ func (c *Cache) RemoveOldest() {
 	if ele != nil {
 		kv := c.ll.Remove(ele).(*entry)
 		delete(c.cache, kv.key)
-		if c.OnEvicted != nil {
-			c.OnEvicted(kv.key, kv.value)
+		if c.onEvicted != nil {
+			c.onEvicted(kv.key, kv.value)
 		}
 	}
 }
