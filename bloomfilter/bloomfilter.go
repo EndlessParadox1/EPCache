@@ -21,14 +21,14 @@ func New(size, nhash uint32) *BloomFilter {
 }
 
 func (bf *BloomFilter) Add(key string) {
-	for i := uint32(0); i < bf.nhash; i++ {
+	for i := range bf.nhash {
 		index := bf.hash([]byte(key), i) % bf.size
 		bf.bitmap[index/8] |= 1 << (index % 8)
 	}
 }
 
 func (bf *BloomFilter) MightContain(key string) bool {
-	for i := uint32(0); i < bf.nhash; i++ {
+	for i := range bf.nhash {
 		index := bf.hash([]byte(key), i) % bf.size
 		if bf.bitmap[index/8]&(1<<(index%8)) == 0 {
 			return false

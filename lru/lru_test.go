@@ -44,7 +44,7 @@ func TestEvict(t *testing.T) {
 		evictedKeys = append(evictedKeys, key)
 	}
 	lru := New(onEvictedFunc)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		lru.Add(fmt.Sprintf("myKey%d", i), 1234)
 	}
 	lru.RemoveOldest()

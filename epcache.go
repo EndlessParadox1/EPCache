@@ -164,14 +164,17 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	g.muLimiter.RLock()
 	switch g.limitMode {
 	case NoLimit:
+		g.muLimiter.RUnlock()
 	case BlockMode:
 		g.limiter.Wait(1)
+		g.muLimiter.RUnlock()
 	case RejectMode:
-		if g.limiter.TakeAvailable(1) == 0 {
+		ret := g.limiter.TakeAvailable(1)
+		g.muLimiter.RUnlock()
+		if ret == 0 {
 			return ByteView{}, errors.New("access restricted")
 		}
 	}
-	g.muLimiter.RUnlock()
 	g.Stats.Gets.Add(1)
 	value, hit := g.lookupCache(key)
 	if hit {
@@ -180,10 +183,11 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	}
 	if g.filter != nil {
 		g.muFilter.RLock()
-		if g.filter.MightContain(key) {
+		ret := g.filter.MightContain(key)
+		g.muFilter.RUnlock()
+		if ret {
 			return ByteView{}, errors.New("forbidden key")
 		}
-		g.muFilter.RUnlock()
 	}
 	return g.load(ctx, key)
 }
