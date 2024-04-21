@@ -14,6 +14,7 @@ func (le LoadError) Error() string {
 // Getter loads data from source, like a DB.
 type Getter interface {
 	// Get depends on users' concrete implementation.
+	// Context's deadline should be treated properly if existed.
 	Get(ctx context.Context, key string) ([]byte, error)
 }
 

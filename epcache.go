@@ -166,7 +166,14 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	case NoLimit:
 		g.muLimiter.RUnlock()
 	case BlockMode:
-		g.limiter.Wait(1)
+		if t, ok := ctx.Deadline(); ok {
+			if !g.limiter.WaitMaxDuration(1, time.Since(t)) {
+				g.muLimiter.RUnlock()
+				return ByteView{}, errors.New("request timeout")
+			}
+		} else {
+			g.limiter.Wait(1)
+		}
 		g.muLimiter.RUnlock()
 	case RejectMode:
 		ret := g.limiter.TakeAvailable(1)

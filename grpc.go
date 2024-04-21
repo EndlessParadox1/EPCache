@@ -115,27 +115,28 @@ func (gp *GrpcPool) Run() {
 	}
 }
 
+// register exposes self to the registry using a mechanism similar to heartbeat. TODO
 func (gp *GrpcPool) register() {
-	etcdClient, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   gp.registry,
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("connecting to etcd failed: %v", err)
 	}
-	defer etcdClient.Close()
-	leaseRes, err := etcdClient.Grant(context.Background(), 60)
-	if err != nil {
+	defer cli.Close()
+	lease, err_ := cli.Grant(context.Background(), 60)
+	if err_ != nil {
 		log.Fatalf("failed to grant lease: %v", err)
 	}
 	key, value := "epcache/"+gp.self, ""
-	_, err = etcdClient.Put(context.Background(), key, value, clientv3.WithLease(leaseRes.ID))
+	_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
 	if err != nil {
 		log.Fatalf("failed to put key: %v", err)
 	}
-	ch, err := etcdClient.KeepAlive(context.Background(), leaseRes.ID)
-	if err != nil {
-		log.Fatal(err)
+	ch, _err := cli.KeepAlive(context.Background(), lease.ID)
+	if _err != nil {
+		log.Fatal(_err)
 	}
 	go func() {
 		for {
@@ -148,23 +149,24 @@ func (gp *GrpcPool) register() {
 	}()
 }
 
+// discover finds out all other peers every 20 minutes. TODO
 func (gp *GrpcPool) discover() {
-	etcdClient, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   gp.registry,
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("connecting to etcd failed: %v", err)
 	}
-	defer etcdClient.Close()
+	defer cli.Close()
 	ch := time.Tick(20 * time.Minute)
 	for {
-		resp, err := etcdClient.Get(context.Background(), "epcache/", clientv3.WithPrefix())
-		if err != nil {
+		res, err_ := cli.Get(context.Background(), "epcache/", clientv3.WithPrefix())
+		if err_ != nil {
 			log.Fatalf("Error retrieving service list: %v", err)
 		}
 		var peers []string
-		for _, kv := range resp.Kvs {
+		for _, kv := range res.Kvs {
 			peers = append(peers, string(kv.Key))
 		}
 		gp.set(peers...)
