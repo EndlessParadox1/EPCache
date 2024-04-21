@@ -242,7 +242,7 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 	return ByteView{cloneBytes(bytes)}, nil
 }
 
-func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
+func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (ByteView, error) {
 	req := &pb.Request{
 		Group: g.name,
 		Key:   key,

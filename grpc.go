@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EndlessParadox1/epcache/consistenthash"
-	pb "github.com/EndlessParadox1/epcache/epcachepb"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/EndlessParadox1/epcache/consistenthash"
+	pb "github.com/EndlessParadox1/epcache/epcachepb"
+	"go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const defaultReplicas = 50
@@ -68,7 +69,7 @@ func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPoo
 	return gp
 }
 
-func (gp *GrpcPool) PickPeer(key string) (PeerGetter, bool) {
+func (gp *GrpcPool) PickPeer(key string) (ProtoGetter, bool) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
 	if gp.peers == nil {
