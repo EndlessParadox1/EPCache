@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EndlessParadox1/epcache/consistenthash"
+	pb "github.com/EndlessParadox1/epcache/epcachepb"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"sync"
 	"time"
-
-	"github.com/EndlessParadox1/epcache/consistenthash"
-	pb "github.com/EndlessParadox1/epcache/epcachepb"
-	"go.etcd.io/etcd/client/v3"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const defaultReplicas = 50
@@ -107,64 +106,68 @@ func (gp *GrpcPool) Run() {
 	}
 	server := grpc.NewServer()
 	pb.RegisterEPCacheServer(server, gp)
-	go func() {
-		etcdClient, err := clientv3.New(clientv3.Config{
-			Endpoints:   gp.registry, // etcd server address
-			DialTimeout: 5 * time.Second,
-		})
-		if err != nil {
-			log.Fatalf("connecting to etcd failed: %v", err)
-		}
-		defer etcdClient.Close()
-		leaseRes, err := etcdClient.Grant(context.Background(), 60)
-		if err != nil {
-			log.Fatalf("failed to grant lease: %v", err)
-		}
-		key, value := "epcache/"+gp.self, ""
-		_, err = etcdClient.Put(context.Background(), key, value, clientv3.WithLease(leaseRes.ID))
-		if err != nil {
-			log.Fatalf("failed to put key: %v", err)
-		}
-		ch, err := etcdClient.KeepAlive(context.Background(), leaseRes.ID)
-		if err != nil {
-			log.Fatal(err)
-		}
-		go func() {
-			for {
-				res := <-ch
-				if res == nil {
-					fmt.Println("Lease expired")
-					return
-				}
-			}
-		}()
-	}()
-	go func() {
-		etcdClient, err := clientv3.New(clientv3.Config{
-			Endpoints:   gp.registry, // etcd server address
-			DialTimeout: 5 * time.Second,
-		})
-		if err != nil {
-			log.Fatalf("connecting to etcd failed: %v", err)
-		}
-		defer etcdClient.Close()
-		ch := time.Tick(20 * time.Minute)
-		for {
-			resp, err := etcdClient.Get(context.Background(), "epcache/", clientv3.WithPrefix())
-			if err != nil {
-				log.Fatalf("Error retrieving service list: %v", err)
-			}
-			var peers []string
-			for _, kv := range resp.Kvs {
-				peers = append(peers, string(kv.Key))
-			}
-			gp.set(peers...)
-			<-ch
-		}
-	}()
+	go gp.register()
+	go gp.discover()
 	log.Printf("GrpcPool listening at %v\n", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
 		log.Fatalf("failed to serve: %v", err_)
+	}
+}
+
+func (gp *GrpcPool) register() {
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   gp.registry,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("connecting to etcd failed: %v", err)
+	}
+	defer etcdClient.Close()
+	leaseRes, err := etcdClient.Grant(context.Background(), 60)
+	if err != nil {
+		log.Fatalf("failed to grant lease: %v", err)
+	}
+	key, value := "epcache/"+gp.self, ""
+	_, err = etcdClient.Put(context.Background(), key, value, clientv3.WithLease(leaseRes.ID))
+	if err != nil {
+		log.Fatalf("failed to put key: %v", err)
+	}
+	ch, err := etcdClient.KeepAlive(context.Background(), leaseRes.ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() {
+		for {
+			res := <-ch
+			if res == nil {
+				fmt.Println("Lease expired")
+				return
+			}
+		}
+	}()
+}
+
+func (gp *GrpcPool) discover() {
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   gp.registry,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("connecting to etcd failed: %v", err)
+	}
+	defer etcdClient.Close()
+	ch := time.Tick(20 * time.Minute)
+	for {
+		resp, err := etcdClient.Get(context.Background(), "epcache/", clientv3.WithPrefix())
+		if err != nil {
+			log.Fatalf("Error retrieving service list: %v", err)
+		}
+		var peers []string
+		for _, kv := range resp.Kvs {
+			peers = append(peers, string(kv.Key))
+		}
+		gp.set(peers...)
+		<-ch
 	}
 }
 
@@ -172,7 +175,6 @@ func (gp *GrpcPool) set(peers ...string) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
-	gp.peers.Add(gp.self)
 	gp.peers.Add(peers...)
 	gp.protoGetters = make(map[string]*protoGetter)
 	for _, peer := range peers {

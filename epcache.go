@@ -115,7 +115,6 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 		g.peers = NoPeer{}
 	} else {
 		g.peers = peers
-		peers.addGroup(g.name)
 	}
 }
 
@@ -203,7 +202,7 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 			return val, nil
 		}
 		g.Stats.LoadsDeduped.Add(1)
-		if peer, ok := g.peers.pickPeer(key); ok {
+		if peer, ok := g.peers.PickPeer(key); ok {
 			val, err := g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
@@ -243,12 +242,12 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 	return ByteView{cloneBytes(bytes)}, nil
 }
 
-func (g *Group) getFromPeer(ctx context.Context, peer peerGetter, key string) (ByteView, error) {
+func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
 	req := &pb.Request{
 		Group: g.name,
 		Key:   key,
 	}
-	res, err := peer.get(ctx, req)
+	res, err := peer.Get(ctx, req)
 	if err != nil {
 		return ByteView{}, err
 	}
