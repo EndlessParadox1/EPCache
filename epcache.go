@@ -152,8 +152,9 @@ func (g *Group) SetFilter(size uint32) {
 	if size == 0 {
 		g.filter = nil
 		g.Stats.LenBlacklist.Store(0)
+	} else {
+		g.filter = bloomfilter.New(20*size, 13)
 	}
-	g.filter = bloomfilter.New(20*size, 13)
 }
 
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +23,7 @@ type protoGetter struct {
 	addr string
 }
 
-func (pg *protoGetter) get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
+func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
 	conn, err := grpc.NewClient(pg.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
 	if err != nil {
 		return nil, err
@@ -41,7 +40,6 @@ type GrpcPool struct {
 	peers        *consistenthash.Map
 	protoGetters map[string]*protoGetter // keys like "localhost:8080"
 
-	groups   []string
 	registry []string
 	pb.UnimplementedEPCacheServer
 }
@@ -71,14 +69,7 @@ func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPoo
 	return gp
 }
 
-func (gp *GrpcPool) addGroup(group string) {
-	if gp.groups == nil {
-		gp.groups = []string{}
-	}
-	gp.groups = append(gp.groups, group)
-}
-
-func (gp *GrpcPool) pickPeer(key string) (peerGetter, bool) {
+func (gp *GrpcPool) PickPeer(key string) (PeerGetter, bool) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
 	if gp.peers == nil {
@@ -117,38 +108,64 @@ func (gp *GrpcPool) Run() {
 	server := grpc.NewServer()
 	pb.RegisterEPCacheServer(server, gp)
 	go func() {
-		log.Printf("GrpcPool listening at %v\n", lis.Addr())
-		if err_ := server.Serve(lis); err_ != nil {
-			log.Fatalf("failed to serve: %v", err_)
+		etcdClient, err := clientv3.New(clientv3.Config{
+			Endpoints:   gp.registry, // etcd server address
+			DialTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			log.Fatalf("connecting to etcd failed: %v", err)
 		}
+		defer etcdClient.Close()
+		leaseRes, err := etcdClient.Grant(context.Background(), 60)
+		if err != nil {
+			log.Fatalf("failed to grant lease: %v", err)
+		}
+		key, value := "epcache/"+gp.self, ""
+		_, err = etcdClient.Put(context.Background(), key, value, clientv3.WithLease(leaseRes.ID))
+		if err != nil {
+			log.Fatalf("failed to put key: %v", err)
+		}
+		ch, err := etcdClient.KeepAlive(context.Background(), leaseRes.ID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		go func() {
+			for {
+				res := <-ch
+				if res == nil {
+					fmt.Println("Lease expired")
+					return
+				}
+			}
+		}()
 	}()
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   gp.registry, // etcd server address
-		DialTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		log.Fatalf("connecting to etcd failed: %v", err)
-	}
-	defer etcdClient.Close()
-	leaseRes, err := etcdClient.Grant(context.Background(), 10)
-	if err != nil {
-		log.Fatalf("Error granting lease: %v", err)
-	}
-	key, value := "epcache/"+gp.self, strings.Join(gp.groups, ",")
-	_, err = etcdClient.Put(context.Background(), key, value, clientv3.WithLease(leaseRes.ID))
-	if err != nil {
-		log.Fatalf("Error putting key: %v", err)
-	}
-	ch, err := etcdClient.KeepAlive(context.TODO(), leaseRes.ID)
-	if err != nil {
-		log.Fatal(err)
-	}
 	go func() {
+		etcdClient, err := clientv3.New(clientv3.Config{
+			Endpoints:   gp.registry, // etcd server address
+			DialTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			log.Fatalf("connecting to etcd failed: %v", err)
+		}
+		defer etcdClient.Close()
+		ch := time.Tick(20 * time.Minute)
 		for {
-			ka := <-ch
-			fmt.Println("ttl:", ka.TTL)
+			resp, err := etcdClient.Get(context.Background(), "epcache/", clientv3.WithPrefix())
+			if err != nil {
+				log.Fatalf("Error retrieving service list: %v", err)
+			}
+			var peers []string
+			for _, kv := range resp.Kvs {
+				peers = append(peers, string(kv.Key))
+			}
+			gp.set(peers...)
+			<-ch
 		}
 	}()
+	log.Printf("GrpcPool listening at %v\n", lis.Addr())
+	if err_ := server.Serve(lis); err_ != nil {
+		log.Fatalf("failed to serve: %v", err_)
+	}
 }
 
 func (gp *GrpcPool) set(peers ...string) {

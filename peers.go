@@ -7,21 +7,18 @@ import (
 )
 
 // PeerGetter loads data from remote using gRPC.
-type peerGetter interface {
-	get(ctx context.Context, in *pb.Request) (*pb.Response, error)
+type PeerGetter interface {
+	Get(ctx context.Context, in *pb.Request) (*pb.Response, error)
 }
 
 type PeerPicker interface {
 	// PickPeer picks peer according to the key.
-	pickPeer(key string) (peerGetter, bool)
-	addGroup(group string)
+	PickPeer(key string) (PeerGetter, bool)
 }
 
 // NoPeer is an implementation of PeerPicker, used for groups running in standalone mode.
 type NoPeer struct{}
 
-func (NoPeer) pickPeer(_ string) (peer peerGetter, ok bool) {
+func (NoPeer) PickPeer(_ string) (peer PeerGetter, ok bool) {
 	return
 }
-
-func (NoPeer) addGroup(_ string) {}
