@@ -113,7 +113,6 @@ func (gp *GrpcPool) Run() {
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -122,13 +121,11 @@ func (gp *GrpcPool) Run() {
 	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-		fmt.Println("Received shutdown signal. Shutting down gracefully...")
-		cancel()
-	}()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println("Received shutdown signal. Shutting down gracefully...")
+	cancel()
 	wg.Wait()
 }
 
@@ -166,18 +163,18 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	ch <- struct{}{}
 	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
 	if err_ != nil {
-		log.Fatal(err_)
+		log.Fatalf("failed to keepalive: %v", err)
 	}
 	for {
 		select {
-		case res := <-leaseResCh:
-			if res == nil {
-				log.Fatalf("Lease expired")
+		case _, ok := <-leaseResCh:
+			if !ok {
+				log.Fatalf("failed to mantain leease")
 			}
 		case <-ctx.Done():
-			_, _err := cli.Delete(context.Background(), key)
+			_, _err := cli.Revoke(context.Background(), lease.ID)
 			if _err != nil {
-				log.Fatalf("failed to delete key: %v", err)
+				log.Fatalf("failed to revoke lease: %v", err)
 			}
 			log.Println("Lease maintenance stopped")
 			return
