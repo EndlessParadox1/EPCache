@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/EndlessParadox1/epcache/consistenthash"
@@ -99,16 +102,49 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return out, nil
 }
 
-// Run starts the GrpcPool as the EPCacheServer.
+// Run TODO
 func (gp *GrpcPool) Run() {
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   gp.registry,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("connecting to etcd failed: %v", err)
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go gp.register(ctx, &wg, cli, ch)
+	wg.Add(1)
+	go gp.discover(ctx, &wg, cli, ch)
+	wg.Add(1)
+	go gp.startServer(ctx, &wg)
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+		fmt.Println("Received shutdown signal. Shutting down gracefully...")
+		cancel()
+	}()
+	wg.Wait()
+}
+
+func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	lis, err := net.Listen("tcp", gp.self)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	server := grpc.NewServer()
 	pb.RegisterEPCacheServer(server, gp)
-	go gp.register()
-	go gp.discover()
+	go func() {
+		<-ctx.Done()
+		log.Println("Shutting down gRPC server...")
+		server.GracefulStop()
+	}()
 	log.Printf("GrpcPool listening at %v\n", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
 		log.Fatalf("failed to serve: %v", err_)
@@ -116,17 +152,10 @@ func (gp *GrpcPool) Run() {
 }
 
 // register exposes self to the registry using a mechanism similar to heartbeat. TODO
-func (gp *GrpcPool) register() {
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   gp.registry,
-		DialTimeout: 5 * time.Second,
-	})
+func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan<- struct{}) {
+	defer wg.Done()
+	lease, err := cli.Grant(context.Background(), 60)
 	if err != nil {
-		log.Fatalf("connecting to etcd failed: %v", err)
-	}
-	defer cli.Close()
-	lease, err_ := cli.Grant(context.Background(), 60)
-	if err_ != nil {
 		log.Fatalf("failed to grant lease: %v", err)
 	}
 	key, value := "epcache/"+gp.self, ""
@@ -134,43 +163,49 @@ func (gp *GrpcPool) register() {
 	if err != nil {
 		log.Fatalf("failed to put key: %v", err)
 	}
-	ch, _err := cli.KeepAlive(context.Background(), lease.ID)
-	if _err != nil {
-		log.Fatal(_err)
+	ch <- struct{}{}
+	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
+	if err_ != nil {
+		log.Fatal(err_)
 	}
-	go func() {
-		for {
-			res := <-ch
+	for {
+		select {
+		case res := <-leaseResCh:
 			if res == nil {
-				fmt.Println("Lease expired")
-				return
+				log.Fatalf("Lease expired")
 			}
+		case <-ctx.Done():
+			_, _err := cli.Delete(context.Background(), key)
+			if _err != nil {
+				log.Fatalf("failed to delete key: %v", err)
+			}
+			log.Println("Lease maintenance stopped")
+			return
 		}
-	}()
+	}
 }
 
 // discover finds out all other peers every 20 minutes. TODO
-func (gp *GrpcPool) discover() {
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   gp.registry,
-		DialTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		log.Fatalf("connecting to etcd failed: %v", err)
-	}
-	defer cli.Close()
-	ch := time.Tick(20 * time.Minute)
+func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch <-chan struct{}) {
+	defer wg.Done()
+	ticker := time.Tick(20 * time.Minute)
+	<-ch
 	for {
-		res, err_ := cli.Get(context.Background(), "epcache/", clientv3.WithPrefix())
-		if err_ != nil {
-			log.Fatalf("Error retrieving service list: %v", err)
+		select {
+		case <-ticker:
+			res, err := cli.Get(context.Background(), "epcache/", clientv3.WithPrefix())
+			if err != nil {
+				log.Fatalf("Error retrieving service list: %v", err)
+			}
+			var peers []string
+			for _, kv := range res.Kvs {
+				peers = append(peers, string(kv.Key))
+			}
+			gp.set(peers...)
+		case <-ctx.Done():
+			log.Println("Service discovery stopped")
+			return
 		}
-		var peers []string
-		for _, kv := range res.Kvs {
-			peers = append(peers, string(kv.Key))
-		}
-		gp.set(peers...)
-		<-ch
 	}
 }
 
