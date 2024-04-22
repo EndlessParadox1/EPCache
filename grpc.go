@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,7 +94,7 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	if group == nil {
 		return nil, errors.New("no such group: " + groupName)
 	}
-	group.Stats.PeerReqs.Add(1)
+	atomic.AddInt64(&group.Stats.PeerReqs, 1)
 	val, err := group.Get(ctx, key)
 	if err != nil {
 		return nil, err
@@ -129,6 +130,7 @@ func (gp *GrpcPool) Run() {
 	wg.Wait()
 }
 
+// startServer TODO
 func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	lis, err := net.Listen("tcp", gp.self)
@@ -148,7 +150,7 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// register exposes self to the registry using a mechanism similar to heartbeat. TODO
+// register TODO
 func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan<- struct{}) {
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
@@ -182,7 +184,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-// discover finds out all other peers every 20 minutes. TODO
+// discover TODO
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch <-chan struct{}) {
 	defer wg.Done()
 	ticker := time.Tick(20 * time.Minute)
@@ -213,6 +215,8 @@ func (gp *GrpcPool) set(peers ...string) {
 	gp.peers.Add(peers...)
 	gp.protoGetters = make(map[string]*protoGetter)
 	for _, peer := range peers {
-		gp.protoGetters[peer] = &protoGetter{addr: peer}
+		if peer != gp.self {
+			gp.protoGetters[peer] = &protoGetter{addr: peer}
+		}
 	}
 }

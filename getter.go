@@ -7,8 +7,8 @@ type LoadError string
 // ErrNotFound must be returned when Getter can't found the data.
 const ErrNotFound LoadError = "key not found in data source"
 
-func (le LoadError) Error() string {
-	return string(le)
+func (e LoadError) Error() string {
+	return string(e)
 }
 
 // Getter loads data from source, like a DB.

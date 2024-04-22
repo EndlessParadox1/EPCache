@@ -25,7 +25,7 @@ var (
 	groupHook func(*Group)
 )
 
-func NewGroup(name string, cacheBytes int, getter Getter) *Group {
+func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	if getter == nil {
 		panic("nil Getter")
 	}
@@ -68,7 +68,7 @@ type Group struct {
 	peers      PeerPicker
 	loader     *singleflight.Group
 	getter     Getter
-	cacheBytes int // limit for sum of mainCache's and hotCache's size
+	cacheBytes int64 // limit for sum of mainCache's and hotCache's size
 
 	// mainCache contains data for which this process is authoritative.
 	mainCache cache
@@ -88,17 +88,17 @@ type Group struct {
 
 // Stats are statistics for group.
 type Stats struct {
-	Accesses      atomic.Int64
-	Gets          atomic.Int64
-	Hits          atomic.Int64
-	Loads         atomic.Int64
-	LoadsDeduped  atomic.Int64 // after singleflight
-	LocalLoads    atomic.Int64
-	LocalLoadErrs atomic.Int64
-	PeerLoads     atomic.Int64
-	PeerLoadErrs  atomic.Int64
-	PeerReqs      atomic.Int64 // requests from peers
-	LenBlacklist  atomic.Int64
+	Reqs          int64
+	Gets          int64
+	Hits          int64
+	Loads         int64
+	LoadsDeduped  int64 // after singleflight
+	LocalLoads    int64
+	LocalLoadErrs int64
+	PeerLoads     int64
+	PeerLoadErrs  int64
+	PeerReqs      int64 // requests from peers
+	LenBlacklist  int64
 }
 
 func (g *Group) Name() string {
@@ -150,7 +150,7 @@ func (g *Group) SetFilter(size uint32) {
 	defer g.muFilter.Unlock()
 	if size == 0 {
 		g.filter = nil
-		g.Stats.LenBlacklist.Store(0)
+		atomic.StoreInt64(&g.Stats.LenBlacklist, 0)
 	} else {
 		g.filter = bloomfilter.New(20*size, 13)
 	}
@@ -160,7 +160,7 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	if g.peers == nil {
 		panic("peers must be specified before using a group")
 	}
-	g.Stats.Accesses.Add(1)
+	atomic.AddInt64(&g.Stats.Reqs, 1)
 	g.muLimiter.RLock()
 	switch g.limitMode {
 	case NoLimit:
@@ -182,10 +182,10 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 			return ByteView{}, errors.New("access restricted")
 		}
 	}
-	g.Stats.Gets.Add(1)
+	atomic.AddInt64(&g.Stats.Gets, 1)
 	value, hit := g.lookupCache(key)
 	if hit {
-		g.Stats.Hits.Add(1)
+		atomic.AddInt64(&g.Stats.Hits, 1)
 		return value, nil
 	}
 	if g.filter != nil {
@@ -200,32 +200,32 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 }
 
 func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
-	g.Stats.Loads.Add(1)
+	atomic.AddInt64(&g.Stats.Loads, 1)
 	val, err := g.loader.Do(key, func() (any, error) {
 		// singleflight only works on overlapping concurrent reqs,
 		// so just lookup cache again before trying to load data from local or remote.
 		if val, hit := g.lookupCache(key); hit {
-			g.Stats.Hits.Add(1)
+			atomic.AddInt64(&g.Stats.Hits, 1)
 			return val, nil
 		}
-		g.Stats.LoadsDeduped.Add(1)
+		atomic.AddInt64(&g.Stats.LoadsDeduped, 1)
 		if peer, ok := g.peers.PickPeer(key); ok {
 			val, err := g.getFromPeer(ctx, peer, key)
 			if err == nil {
-				g.Stats.PeerLoads.Add(1)
+				atomic.AddInt64(&g.Stats.PeerLoads, 1)
 				return val, nil
 			}
-			g.Stats.PeerLoadErrs.Add(1)
+			atomic.AddInt64(&g.Stats.PeerLoadErrs, 1)
 			if errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
 		}
 		val, err := g.getLocally(ctx, key)
 		if err != nil {
-			g.Stats.LocalLoadErrs.Add(1)
+			atomic.AddInt64(&g.Stats.LocalLoadErrs, 1)
 			return nil, err
 		}
-		g.Stats.LocalLoads.Add(1)
+		atomic.AddInt64(&g.Stats.LocalLoads, 1)
 		g.populateCache(key, val, &g.mainCache)
 		return val, nil
 	})
@@ -234,7 +234,7 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 			g.muFilter.Lock()
 			g.filter.Add(key)
 			g.muFilter.Unlock()
-			g.Stats.LenBlacklist.Add(1)
+			atomic.AddInt64(&g.Stats.LenBlacklist, 1)
 		}
 		return ByteView{}, err
 	}

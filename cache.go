@@ -2,24 +2,25 @@ package epcache
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/EndlessParadox1/epcache/lru"
 )
 
 type cache struct {
 	mu         sync.RWMutex
-	nbytes     int
+	nbytes     int64
 	lru        *lru.Cache
-	nhit, nget int
-	nevict     int
+	nhit, nget int64
+	nevict     int64
 }
 
 type CacheStats struct {
-	Bytes  int
-	Items  int
-	Hits   int
-	Gets   int
-	Evicts int
+	Bytes  int64
+	Items  int64
+	Hits   int64
+	Gets   int64
+	Evicts int64
 }
 
 func (c *cache) stats() CacheStats {
@@ -34,31 +35,38 @@ func (c *cache) stats() CacheStats {
 	}
 }
 
+func (c *cache) items() int64 {
+	if c.lru == nil {
+		return 0
+	}
+	return int64(c.lru.Len())
+}
+
 func (c *cache) add(key string, value ByteView) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.lru == nil {
 		c.lru = lru.New(func(key string, value any) {
-			c.nbytes -= len(key) + value.(ByteView).Len()
+			c.nbytes -= int64(len(key) + value.(ByteView).Len())
 			c.nevict++
 		})
 	} // lazy init
 	c.lru.Add(key, value)
-	c.nbytes += len(key) + value.Len()
+	c.nbytes += int64(len(key) + value.Len())
 }
 
 func (c *cache) get(key string) (value ByteView, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.nget++
+	atomic.AddInt64(&c.nget, 1)
 	if c.lru == nil {
 		return
 	}
+	c.mu.RLock()
 	val, ok_ := c.lru.Get(key)
+	c.mu.RUnlock()
 	if !ok_ {
 		return
 	}
-	c.nhit++
+	atomic.AddInt64(&c.nhit, 1)
 	return val.(ByteView), true
 }
 
@@ -68,15 +76,8 @@ func (c *cache) removeOldest() {
 	c.lru.RemoveOldest()
 }
 
-func (c *cache) bytes() int {
+func (c *cache) bytes() int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.nbytes
-}
-
-func (c *cache) items() int {
-	if c.lru == nil {
-		return 0
-	}
-	return c.lru.Len()
 }
