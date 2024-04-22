@@ -57,13 +57,13 @@ func (c *cache) add(key string, value ByteView) {
 
 func (c *cache) get(key string) (value ByteView, ok bool) {
 	atomic.AddInt64(&c.nget, 1)
+	c.mu.RLock()
 	if c.lru == nil {
 		return
 	}
-	c.mu.RLock()
-	val, ok_ := c.lru.Get(key)
+	val, hit := c.lru.Get(key)
 	c.mu.RUnlock()
-	if !ok_ {
+	if !hit {
 		return
 	}
 	atomic.AddInt64(&c.nhit, 1)
@@ -72,8 +72,8 @@ func (c *cache) get(key string) (value ByteView, ok bool) {
 
 func (c *cache) removeOldest() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.lru.RemoveOldest()
+	c.mu.Unlock()
 }
 
 func (c *cache) bytes() int64 {

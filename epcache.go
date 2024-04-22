@@ -150,10 +150,10 @@ func (g *Group) SetFilter(size uint32) {
 	defer g.muFilter.Unlock()
 	if size == 0 {
 		g.filter = nil
-		atomic.StoreInt64(&g.Stats.LenBlacklist, 0)
 	} else {
 		g.filter = bloomfilter.New(20*size, 13)
 	}
+	g.Stats.LenBlacklist = 0
 }
 
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
@@ -164,24 +164,15 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	g.muLimiter.RLock()
 	switch g.limitMode {
 	case NoLimit:
-		g.muLimiter.RUnlock()
 	case BlockMode:
-		if t, ok := ctx.Deadline(); ok {
-			if !g.limiter.WaitMaxDuration(1, time.Since(t)) {
-				g.muLimiter.RUnlock()
-				return ByteView{}, errors.New("request timeout")
-			}
-		} else {
-			g.limiter.Wait(1)
-		}
-		g.muLimiter.RUnlock()
+		g.limiter.Wait(1)
 	case RejectMode:
-		ret := g.limiter.TakeAvailable(1)
-		g.muLimiter.RUnlock()
-		if ret == 0 {
+		if g.limiter.TakeAvailable(1) == 0 {
+			g.muLimiter.RUnlock()
 			return ByteView{}, errors.New("access restricted")
 		}
 	}
+	g.muLimiter.RUnlock()
 	atomic.AddInt64(&g.Stats.Gets, 1)
 	value, hit := g.lookupCache(key)
 	if hit {
@@ -233,8 +224,8 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 		if g.filter != nil && errors.Is(err, ErrNotFound) {
 			g.muFilter.Lock()
 			g.filter.Add(key)
+			g.Stats.LenBlacklist++
 			g.muFilter.Unlock()
-			atomic.AddInt64(&g.Stats.LenBlacklist, 1)
 		}
 		return ByteView{}, err
 	}
