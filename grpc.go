@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"log"
 	"net"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const defaultReplicas = 50
@@ -220,7 +220,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	if err != nil {
 		log.Fatalf("failed to put key: %v", err)
 	}
-	ch <- struct{}{}
+	close(ch)
 	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
 	if err_ != nil {
 		log.Fatalf("failed to keepalive: %v", err)
