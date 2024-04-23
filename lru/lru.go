@@ -23,6 +23,7 @@ func New(onEvicted func(string, any)) *Cache {
 	}
 }
 
+// Add adds or just updates an entry.
 func (c *Cache) Add(key string, value any) {
 	if ele, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ele)

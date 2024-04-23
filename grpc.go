@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"log"
 	"net"
 	"os"
@@ -23,12 +24,12 @@ import (
 const defaultReplicas = 50
 
 // protoGetter implements PeerGetter with gRPC
-type protoGetter struct {
+type protoPeer struct {
 	addr string
 }
 
-func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
-	conn, err := grpc.NewClient(pg.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
+func (p *protoPeer) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
+	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
 	if err != nil {
 		return nil, err
 	}
@@ -37,12 +38,29 @@ func (pg *protoGetter) Get(ctx context.Context, in *pb.Request) (*pb.Response, e
 	return client.Get(ctx, in)
 }
 
+// SyncOne TODO
+func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
+	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
+	if err != nil {
+		ch <- errors.New(p.addr)
+		return
+	}
+	defer conn.Close()
+	client := pb.NewEPCacheClient(conn)
+	_, err = client.Sync(context.Background(), data)
+	if err != nil {
+		ch <- errors.New(p.addr)
+		return
+	}
+	ch <- nil
+}
+
 type GrpcPool struct {
-	self         string
-	opts         GrpcPoolOptions
-	mu           sync.RWMutex // guards peers and protoGetters
-	peers        *consistenthash.Map
-	protoGetters map[string]*protoGetter // keys like "localhost:8080"
+	self       string
+	opts       GrpcPoolOptions
+	mu         sync.RWMutex // guards peers and protoGetters
+	peers      *consistenthash.Map
+	protoPeers map[string]*protoPeer // keys like "localhost:8080"
 
 	registry []string
 	pb.UnimplementedEPCacheServer
@@ -73,35 +91,75 @@ func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPoo
 	return gp
 }
 
-func (gp *GrpcPool) PickPeer(key string) (ProtoGetter, bool) {
+func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
 	if gp.peers == nil {
 		return nil, false
 	}
 	if peer := gp.peers.Get(key); peer != gp.self {
-		return gp.protoGetters[peer], true
+		return gp.protoPeers[peer], true
 	}
 	return nil, false
+}
+
+// SyncAll TODO
+func (gp *GrpcPool) SyncAll(data *pb.SyncData) error {
+	gp.mu.RLock()
+	defer gp.mu.RUnlock()
+	if gp.peers == nil {
+		return nil
+	}
+	ch := make(chan error)
+	count := 0
+	for _, peer := range gp.protoPeers {
+		go peer.SyncOne(data, ch)
+		count++
+	}
+	var failSyncPeers []string
+	for err := range ch {
+		if err != nil {
+			failSyncPeers = append(failSyncPeers, err.Error())
+		}
+		count--
+		if count == 0 {
+			break
+		}
+	}
+	if len(failSyncPeers) > 0 {
+		return errors.New(fmt.Sprintf("failed to sync to these peers: %v", failSyncPeers))
+	}
+	return nil
 }
 
 // Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
 	groupName := in.GetGroup()
-	key := in.GetKey()
 	group := GetGroup(groupName)
 	if group == nil {
 		return nil, errors.New("no such group: " + groupName)
 	}
 	atomic.AddInt64(&group.Stats.PeerReqs, 1)
-	val, err := group.Get(ctx, key)
+	key := in.GetKey()
+	val, err := group.Get(ctx, key) // TODO
 	if err != nil {
 		return nil, err
 	}
 	out := &pb.Response{Value: val.ByteSlice()}
 	return out, nil
 }
+
+// Sync TODO
+func (gp *GrpcPool) Sync(_ context.Context, data *pb.SyncData) (out *emptypb.Empty, err error) {
+	groupName := data.GetGroup()
+	group := GetGroup(groupName)
+	if group == nil {
+		return
+	}
+	group.update(data.GetKey(), data.GetValue())
+	return
+} // TODO
 
 // Run TODO
 func (gp *GrpcPool) Run() {
@@ -213,10 +271,10 @@ func (gp *GrpcPool) set(peers ...string) {
 	defer gp.mu.Unlock()
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
 	gp.peers.Add(peers...)
-	gp.protoGetters = make(map[string]*protoGetter)
+	gp.protoPeers = make(map[string]*protoPeer)
 	for _, peer := range peers {
 		if peer != gp.self {
-			gp.protoGetters[peer] = &protoGetter{addr: peer}
+			gp.protoPeers[peer] = &protoPeer{addr: peer}
 		}
 	}
 }

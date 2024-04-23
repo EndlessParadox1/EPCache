@@ -4,20 +4,15 @@ package epcache
 import (
 	"context"
 	"errors"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/EndlessParadox1/epcache/bloomfilter"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/singleflight"
 	"github.com/juju/ratelimit"
 )
-
-func init() {
-	rand.NewSource(time.Now().UnixNano())
-}
 
 var (
 	mu        sync.RWMutex
@@ -65,7 +60,7 @@ func RegisterGroupHook(fn func(*Group)) {
 // Group is a set of associated data spreading over one or more processes.
 type Group struct {
 	name       string
-	peers      PeerPicker
+	peers      PeerAgent
 	loader     *singleflight.Group
 	getter     Getter
 	cacheBytes int64 // limit for sum of mainCache's and hotCache's size
@@ -107,7 +102,7 @@ func (g *Group) Name() string {
 
 // RegisterPeers specifies PeerPicker for a group, e.g. NoPeer, GrpcPool
 // or any that implements the PeerPicker.
-func (g *Group) RegisterPeers(peers PeerPicker) {
+func (g *Group) RegisterPeers(peers PeerAgent) {
 	if g.peers != nil {
 		panic("RegisterPeers called more than once")
 	}
@@ -121,7 +116,7 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 type LimitMode int
 
 const (
-	NoLimit = iota
+	NoLimit LimitMode = iota
 	BlockMode
 	RejectMode
 )
@@ -240,7 +235,7 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 	return ByteView{cloneBytes(bytes)}, nil
 }
 
-func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (ByteView, error) {
+func (g *Group) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (ByteView, error) {
 	req := &pb.Request{
 		Group: g.name,
 		Key:   key,
@@ -250,11 +245,33 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (
 		return ByteView{}, err
 	}
 	value := ByteView{res.GetValue()}
-	if rand.Intn(10) == 0 {
+	if rand.IntN(10) == 0 {
 		g.populateCache(key, value, &g.hotCache)
 	}
 	return value, nil
 }
+
+// Update updates data in cache and then synchronizes to all peers.
+// This should be executed when data in source is changed. TODO
+func (g *Group) Update(key string, value []byte) error {
+	g.update(key, value)
+	data := &pb.SyncData{
+		Group: g.name,
+		Key:   key,
+		Value: cloneBytes(value),
+	}
+	return g.peers.SyncAll(data)
+}
+
+func (g *Group) update(key string, value []byte) {
+	if _, ok := g.mainCache.get(key); ok {
+		g.populateCache(key, ByteView{cloneBytes(value)}, &g.mainCache)
+		return
+	}
+	if _, ok := g.hotCache.get(key); ok {
+		g.populateCache(key, ByteView{cloneBytes(value)}, &g.hotCache)
+	}
+} // TODO
 
 func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	value, ok = g.mainCache.get(key)

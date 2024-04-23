@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 package epcachepb;
 
 option go_package = "github.com/EndlessParadox1/epcache/epcachepb";
@@ -13,10 +15,16 @@ message Response {
     bytes value = 1;
 }
 
-service EPCache {
-    rpc Get(Request) returns (Response) {};
+message SyncData {
+    string group = 1;
+    string key = 2;
+    bytes Value = 3;
 }
 
-// In this dir, use `protoc --go_out=. --go_opt=paths=source_relative \
-// --go-grpc_out=. --go-grpc_opt=paths=source_relative *.proto` \
-// to both get *.pb.go and *_grpc.pb.go
+service EPCache {
+    rpc Get(Request) returns (Response);
+    rpc Sync(SyncData) returns (google.protobuf.Empty); // TODO
+}
+
+// In this dir, use `protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative *.proto`
+// to get both *.pb.go and *_grpc.pb.go
