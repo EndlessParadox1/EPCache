@@ -42,14 +42,24 @@ func (c *Cache) Get(key string) (value any, ok bool) {
 	return
 }
 
+func (c *Cache) Remove(key string) {
+	if ele, hit := c.cache[key]; hit {
+		c.removeElement(ele)
+	}
+}
+
 func (c *Cache) RemoveOldest() {
 	ele := c.ll.Back()
 	if ele != nil {
-		kv := c.ll.Remove(ele).(*entry)
-		delete(c.cache, kv.key)
-		if c.onEvicted != nil {
-			c.onEvicted(kv.key, kv.value)
-		}
+		c.removeElement(ele)
+	}
+}
+
+func (c *Cache) removeElement(ele *list.Element) {
+	kv := c.ll.Remove(ele).(*entry)
+	delete(c.cache, kv.key)
+	if c.onEvicted != nil {
+		c.onEvicted(kv.key, kv.value)
 	}
 }
 

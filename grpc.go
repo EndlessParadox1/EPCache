@@ -11,11 +11,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+
 	"time"
 
 	"github.com/EndlessParadox1/epcache/consistenthash"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
-	"go.etcd.io/etcd/client/v3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -23,7 +24,6 @@ import (
 
 const defaultReplicas = 50
 
-// protoGetter implements PeerGetter with gRPC
 type protoPeer struct {
 	addr string
 }
@@ -38,7 +38,6 @@ func (p *protoPeer) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return client.Get(ctx, in)
 }
 
-// SyncOne TODO
 func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
 	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
 	if err != nil {
@@ -62,6 +61,7 @@ type GrpcPool struct {
 	peers      *consistenthash.Map
 	protoPeers map[string]*protoPeer // keys like "localhost:8080"
 
+	logger   *log.Logger
 	registry []string
 	pb.UnimplementedEPCacheServer
 }
@@ -80,6 +80,7 @@ func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPoo
 	grpcPoolExist = true
 	gp := &GrpcPool{
 		self:     self,
+		logger:   log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		registry: registry,
 	}
 	if opts != nil {
@@ -104,11 +105,11 @@ func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 }
 
 // SyncAll TODO
-func (gp *GrpcPool) SyncAll(data *pb.SyncData) error {
+func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
 	if gp.peers == nil {
-		return nil
+		return
 	}
 	ch := make(chan error)
 	count := 0
@@ -127,9 +128,17 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) error {
 		}
 	}
 	if len(failSyncPeers) > 0 {
-		return errors.New(fmt.Sprintf("failed to sync to these peers: %v", failSyncPeers))
+		gp.logger.Printf("failed to sync to these peers: %v\n", failSyncPeers)
 	}
-	return nil
+}
+
+func (gp *GrpcPool) ListPeers() (ans []string) {
+	gp.mu.RLock()
+	defer gp.mu.RUnlock()
+	for addr := range gp.protoPeers {
+		ans = append(ans, addr)
+	}
+	return
 }
 
 // Implementing GrpcPool as the EPCacheServer.
@@ -150,14 +159,18 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return out, nil
 }
 
-// Sync TODO
 func (gp *GrpcPool) Sync(_ context.Context, data *pb.SyncData) (out *emptypb.Empty, err error) {
 	groupName := data.GetGroup()
 	group := GetGroup(groupName)
 	if group == nil {
 		return
 	}
-	group.update(data.GetKey(), data.GetValue())
+	switch data.GetMethod() {
+	case "U":
+		go group.update(data.GetKey(), data.GetValue())
+	case "R":
+		go group.remove(data.GetKey())
+	}
 	return
 } // TODO
 
@@ -168,7 +181,7 @@ func (gp *GrpcPool) Run() {
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		log.Fatalf("connecting to etcd failed: %v", err)
+		gp.logger.Fatalf("connecting to etcd failed: %v", err)
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -193,18 +206,18 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	lis, err := net.Listen("tcp", gp.self)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		gp.logger.Fatalf("failed to listen: %v", err)
 	}
 	server := grpc.NewServer()
 	pb.RegisterEPCacheServer(server, gp)
 	go func() {
 		<-ctx.Done()
-		log.Println("Shutting down gRPC server...")
+		gp.logger.Println("Shutting down gRPC server...")
 		server.GracefulStop()
 	}()
-	log.Printf("GrpcPool listening at %v\n", lis.Addr())
+	gp.logger.Printf("GrpcPool listening at %v\n", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
-		log.Fatalf("failed to serve: %v", err_)
+		gp.logger.Fatalf("failed to serve: %v", err_)
 	}
 }
 
@@ -213,30 +226,30 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
 	if err != nil {
-		log.Fatalf("failed to grant lease: %v", err)
+		gp.logger.Fatalf("failed to grant lease: %v", err)
 	}
 	key, value := "epcache/"+gp.self, ""
 	_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
 	if err != nil {
-		log.Fatalf("failed to put key: %v", err)
+		gp.logger.Fatalf("failed to put key: %v", err)
 	}
 	close(ch)
 	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
 	if err_ != nil {
-		log.Fatalf("failed to keepalive: %v", err)
+		gp.logger.Fatalf("failed to keepalive: %v", err)
 	}
 	for {
 		select {
 		case _, ok := <-leaseResCh:
 			if !ok {
-				log.Fatalf("failed to mantain leease")
+				gp.logger.Fatalf("failed to mantain leease")
 			}
 		case <-ctx.Done():
 			_, _err := cli.Revoke(context.Background(), lease.ID)
 			if _err != nil {
-				log.Fatalf("failed to revoke lease: %v", err)
+				gp.logger.Fatalf("failed to revoke lease: %v", err)
 			}
-			log.Println("Lease maintenance stopped")
+			gp.logger.Println("Lease maintenance stopped")
 			return
 		}
 	}
@@ -252,7 +265,7 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 		case <-ticker:
 			res, err := cli.Get(context.Background(), "epcache/", clientv3.WithPrefix())
 			if err != nil {
-				log.Fatalf("Error retrieving service list: %v", err)
+				gp.logger.Fatalf("Error retrieving service list: %v", err)
 			}
 			var peers []string
 			for _, kv := range res.Kvs {
@@ -260,7 +273,7 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			}
 			gp.set(peers...)
 		case <-ctx.Done():
-			log.Println("Service discovery stopped")
+			gp.logger.Println("Service discovery stopped")
 			return
 		}
 	}

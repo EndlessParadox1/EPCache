@@ -93,7 +93,8 @@ type Stats struct {
 	PeerLoads     int64
 	PeerLoadErrs  int64
 	PeerReqs      int64 // requests from peers
-	LenBlacklist  int64
+
+	LenBlacklist int64
 }
 
 func (g *Group) Name() string {
@@ -251,17 +252,18 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (By
 	return value, nil
 }
 
-// Update updates data in cache and then synchronizes to all peers.
-// This should be executed when data in source is changed. TODO
-func (g *Group) Update(key string, value []byte) error {
-	g.update(key, value)
+// OnUpdate updates data in cache and then syncs to all peers.
+// This must be called when data in source is changed.
+func (g *Group) OnUpdate(key string, value []byte) {
 	data := &pb.SyncData{
-		Group: g.name,
-		Key:   key,
-		Value: cloneBytes(value),
+		Method: "U",
+		Group:  g.name,
+		Key:    key,
+		Value:  cloneBytes(value),
 	}
-	return g.peers.SyncAll(data)
-}
+	go g.peers.SyncAll(data)
+	g.update(key, value)
+} // TODO
 
 func (g *Group) update(key string, value []byte) {
 	if _, ok := g.mainCache.get(key); ok {
@@ -272,6 +274,28 @@ func (g *Group) update(key string, value []byte) {
 		g.populateCache(key, ByteView{cloneBytes(value)}, &g.hotCache)
 	}
 } // TODO
+
+// OnRemove removes data in cache and then syncs to all peers.
+// This must be called when data in source is purged.
+func (g *Group) OnRemove(key string) {
+	data := &pb.SyncData{
+		Method: "R",
+		Group:  g.name,
+		Key:    key,
+	}
+	go g.peers.SyncAll(data)
+	g.remove(key)
+} // TODO
+
+func (g *Group) remove(key string) {
+	if _, ok := g.mainCache.get(key); ok {
+		g.mainCache.remove(key)
+		return
+	}
+	if _, ok := g.hotCache.get(key); ok {
+		g.hotCache.remove(key)
+	}
+}
 
 func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	value, ok = g.mainCache.get(key)
