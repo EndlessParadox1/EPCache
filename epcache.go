@@ -252,7 +252,7 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (By
 	return value, nil
 }
 
-// OnUpdate updates data in cache and then syncs to all peers.
+// OnUpdate updates data in cache and then syncs to all peers in background.
 // This must be called when data in source is changed.
 func (g *Group) OnUpdate(key string, value []byte) {
 	data := &pb.SyncData{
@@ -263,7 +263,7 @@ func (g *Group) OnUpdate(key string, value []byte) {
 	}
 	go g.peers.SyncAll(data)
 	g.update(key, value)
-} // TODO
+}
 
 func (g *Group) update(key string, value []byte) {
 	if _, ok := g.mainCache.get(key); ok {
@@ -273,9 +273,9 @@ func (g *Group) update(key string, value []byte) {
 	if _, ok := g.hotCache.get(key); ok {
 		g.populateCache(key, ByteView{cloneBytes(value)}, &g.hotCache)
 	}
-} // TODO
+}
 
-// OnRemove removes data in cache and then syncs to all peers.
+// OnRemove removes data in cache and then syncs to all peers in background.
 // This must be called when data in source is purged.
 func (g *Group) OnRemove(key string) {
 	data := &pb.SyncData{
@@ -285,7 +285,7 @@ func (g *Group) OnRemove(key string) {
 	}
 	go g.peers.SyncAll(data)
 	g.remove(key)
-} // TODO
+}
 
 func (g *Group) remove(key string) {
 	if _, ok := g.mainCache.get(key); ok {

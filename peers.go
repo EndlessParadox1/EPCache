@@ -16,7 +16,7 @@ type ProtoPeer interface {
 type PeerAgent interface {
 	// PickPeer picks peer according to the key.
 	PickPeer(key string) (ProtoPeer, bool)
-	// SyncAll trys to sync updated data to all peers.
+	// SyncAll trys to sync data to all peers.
 	SyncAll(data *pb.SyncData)
 	// ListPeers lists all peers.
 	ListPeers() []string

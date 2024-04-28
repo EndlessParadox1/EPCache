@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-
 	"time"
 
 	"github.com/EndlessParadox1/epcache/consistenthash"
@@ -39,7 +38,7 @@ func (p *protoPeer) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 }
 
 func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
-	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
+	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		ch <- errors.New(p.addr)
 		return
@@ -104,7 +103,7 @@ func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 	return nil, false
 }
 
-// SyncAll TODO
+// SyncAll trys to sync data to all peers in an async way, and logs error if any.
 func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
@@ -116,7 +115,7 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	for _, peer := range gp.protoPeers {
 		go peer.SyncOne(data, ch)
 		count++
-	}
+	} // TODO
 	var failSyncPeers []string
 	for err := range ch {
 		if err != nil {
@@ -135,6 +134,9 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 func (gp *GrpcPool) ListPeers() (ans []string) {
 	gp.mu.RLock()
 	defer gp.mu.RUnlock()
+	if gp.peers == nil {
+		return
+	}
 	for addr := range gp.protoPeers {
 		ans = append(ans, addr)
 	}
@@ -172,7 +174,7 @@ func (gp *GrpcPool) Sync(_ context.Context, data *pb.SyncData) (out *emptypb.Emp
 		go group.remove(data.GetKey())
 	}
 	return
-} // TODO
+}
 
 // Run TODO
 func (gp *GrpcPool) Run() {
