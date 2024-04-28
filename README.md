@@ -5,7 +5,27 @@
 
 ## Structure
 ```
-epcache
+.
+├── bloomfilter
+│   └── bloomfilter.go
+├── consistenthash
+│   └── consistenthash.go
+├── epcachepb
+│   ├── epcachepb_grpc.pb.go
+│   ├── epcachepb.pb.go
+│   └── epcachepb.proto
+├── etcd
+│   └── Procfile
+├── lru
+│   └── lru.go
+├── singleflight
+│   └── singleflight.go
+├── byteview.go
+├── cache.go
+├── epcache.go
+├── getter.go
+├── grpc.go
+└── peers.go
 ```
 
 ## Procedure
