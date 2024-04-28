@@ -13,7 +13,7 @@ type call struct {
 
 type Group struct {
 	mu sync.Mutex
-	m  map[string]*call // map key to a call
+	m  map[string]*call // maps key to a call
 }
 
 func (g *Group) Do(key string, fn func() (any, error)) (any, error) {
