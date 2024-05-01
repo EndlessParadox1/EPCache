@@ -266,31 +266,48 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// register updates groups owned to the etcd every 20 minute.
+// register updates groups owned to the etcd when changed.
 func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
 	defer wg.Done()
-	key := gp.prefix + gp.self
 	lease, err := cli.Grant(context.Background(), 60)
 	if err != nil {
-
+		gp.logger.Fatal("failed to grant lease:", err)
 	}
+	key := gp.prefix + gp.self
+	fn := func() {
+		value := gp.listGroups()
+		_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
+		if err != nil {
+			gp.logger.Fatal("failed to put key:", err)
+		}
+	}
+	fn()
+	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
+	if err_ != nil {
+		gp.logger.Fatal("failed to keepalive:", err)
+	}
+	gp.ch = make(chan struct{})
 	for {
 		select {
-		case <-ticker:
-			value := gp.listGroups()
-			_, err := cli.Put(context.Background(), key, value)
-			if err != nil {
-				gp.logger.Fatal("failed to put key:", err)
+		case _, ok := <-leaseResCh:
+			if !ok {
+				gp.logger.Fatal("failed to maintain lease")
 			}
+		case <-gp.ch:
+			fn()
 		case <-ctx.Done():
-			_, err := cli.Delete(context.Background(), key)
-			if err != nil {
-				gp.logger.Println("failed to proactively delete key:", err)
+			_, _err := cli.Revoke(context.Background(), lease.ID)
+			if _err != nil {
+				gp.logger.Println("failed to proactively revoke key:", _err)
 			}
 			gp.logger.Println("Service register stopped")
 			return
 		}
 	}
+}
+
+func (gp *GrpcPool) put() {
+
 }
 
 // discover finds out all peers and the groups they owned from etcd when changes happened.
