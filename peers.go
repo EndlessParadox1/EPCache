@@ -14,10 +14,14 @@ type ProtoPeer interface {
 }
 
 type PeerAgent interface {
-	// PickPeer picks peer according to the key.
-	PickPeer(key string) (ProtoPeer, bool)
+	// PickPeer picks peer with the same group according to the key.
+	PickPeer(group, key string) (ProtoPeer, bool)
 	// SyncAll trys to sync data to all peers.
 	SyncAll(data *pb.SyncData)
+	// EnrollGroup enrolls the group.
+	EnrollGroup(group string)
+	// WithDrawGroup withdraws the group.
+	WithDrawGroup(group string)
 	// ListPeers lists all peers.
 	ListPeers() []string
 }
@@ -25,11 +29,15 @@ type PeerAgent interface {
 // NoPeer is an implementation of PeerAgent, used for groups running in standalone mode.
 type NoPeer struct{}
 
-func (NoPeer) PickPeer(_ string) (peer ProtoPeer, ok bool) {
+func (NoPeer) PickPeer(_, _ string) (peer ProtoPeer, ok bool) {
 	return
 }
 
 func (NoPeer) SyncAll(_ *pb.SyncData) {}
+
+func (NoPeer) EnrollGroup(_ string) {}
+
+func (NoPeer) WithDrawGroup(_ string) {}
 
 func (NoPeer) ListPeers() (ans []string) {
 	return

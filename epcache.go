@@ -15,9 +15,8 @@ import (
 )
 
 var (
-	mu        sync.RWMutex
-	groups    = make(map[string]*Group)
-	groupHook func(*Group)
+	mu     sync.RWMutex
+	groups = make(map[string]*Group)
 )
 
 func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
@@ -27,7 +26,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	mu.Lock()
 	defer mu.Unlock()
 	if _, dup := groups[name]; dup {
-		panic("duplicate registration of group: " + name)
+		panic("duplicate group: " + name)
 	}
 	g := &Group{
 		name:       name,
@@ -35,11 +34,19 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		getter:     getter,
 		cacheBytes: cacheBytes,
 	}
-	if groupHook != nil {
-		groupHook(g)
-	}
 	groups[name] = g
 	return g
+}
+
+func DelGroup(name string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if group, ok := groups[name]; ok {
+		if group.peers != nil {
+			group.peers.WithDrawGroup(name)
+		}
+		delete(groups, name)
+	}
 }
 
 func GetGroup(name string) *Group {
@@ -47,14 +54,6 @@ func GetGroup(name string) *Group {
 	defer mu.RUnlock()
 	g := groups[name]
 	return g
-}
-
-// RegisterGroupHook sets func that will be executed each time a group is created.
-func RegisterGroupHook(fn func(*Group)) {
-	if groupHook != nil {
-		panic("RegisterGroupHook called more than once")
-	}
-	groupHook = fn
 }
 
 // Group is a set of associated data spreading over one or more processes.
@@ -112,6 +111,7 @@ func (g *Group) RegisterPeers(peers PeerAgent) {
 	} else {
 		g.peers = peers
 	}
+	g.peers.EnrollGroup(g.name)
 }
 
 type LimitMode int
@@ -196,7 +196,7 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 			return val, nil
 		}
 		atomic.AddInt64(&g.Stats.LoadsDeduped, 1)
-		if peer, ok := g.peers.PickPeer(key); ok {
+		if peer, ok := g.peers.PickPeer(g.name, key); ok {
 			val, err := g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				atomic.AddInt64(&g.Stats.PeerLoads, 1)
