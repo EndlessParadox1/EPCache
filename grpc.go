@@ -55,17 +55,19 @@ func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
 
 type GrpcPool struct {
 	self     string
+	prefix   string
+	registry []string
 	opts     GrpcPoolOptions
+	logger   *log.Logger
+	pb.UnimplementedEPCacheServer
+
 	muGroups sync.RWMutex
 	groups   map[string]bool
+	ch       chan struct{} // notifies goroutine register when groups changed
 
-	muPeers    sync.RWMutex                   // guards peers and protoPeers
+	muPeers    sync.RWMutex
 	peers      map[string]*consistenthash.Map // maps groups to different hash rings
 	protoPeers map[string]*protoPeer          // keys like "localhost:8080"
-
-	logger   *log.Logger
-	registry []string
-	pb.UnimplementedEPCacheServer
 }
 
 type GrpcPoolOptions struct {
@@ -75,8 +77,11 @@ type GrpcPoolOptions struct {
 
 var grpcPoolExist bool
 
-// NewGrpcPool returns a GrpcPool instance, address of etcd must be specified on parameter `registry`.
-func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPool {
+// NewGrpcPool returns a GrpcPool instance.
+//
+//	prefix: The working directory of the EPCache cluster.
+//	registry: The listening addresses of the etcd cluster.
+func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
 	}
@@ -85,6 +90,7 @@ func NewGrpcPool(self string, registry []string, opts *GrpcPoolOptions) *GrpcPoo
 		self:     self,
 		groups:   make(map[string]bool),
 		logger:   log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
+		prefix:   prefix,
 		registry: registry,
 	}
 	if opts != nil {
@@ -140,12 +146,18 @@ func (gp *GrpcPool) EnrollGroup(group string) {
 	gp.muGroups.Lock()
 	gp.groups[group] = true
 	gp.muGroups.Unlock()
+	if gp.ch != nil {
+		gp.ch <- struct{}{}
+	}
 }
 
 func (gp *GrpcPool) WithDrawGroup(group string) {
 	gp.muGroups.Lock()
 	delete(gp.groups, group)
 	gp.muGroups.Unlock()
+	if gp.ch != nil {
+		gp.ch <- struct{}{}
+	}
 }
 
 func (gp *GrpcPool) listGroups() string {
@@ -219,14 +231,11 @@ func (gp *GrpcPool) Run() {
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	// This ensures that service registration will occur before the first service discovery,
-	// so that peers will always include self.
-	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go gp.register(ctx, &wg, cli, ch)
+	go gp.register(ctx, &wg, cli)
 	wg.Add(1)
-	go gp.discover(ctx, &wg, cli, ch)
+	go gp.discover(ctx, &wg, cli)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
 	sigChan := make(chan os.Signal, 1)
@@ -258,11 +267,13 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // register updates groups owned to the etcd every 20 minute.
-func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan<- struct{}) {
+func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
 	defer wg.Done()
-	key := "epcache/" + gp.self
-	flag := false
-	ticker := time.Tick(20 * time.Minute)
+	key := gp.prefix + gp.self
+	lease, err := cli.Grant(context.Background(), 60)
+	if err != nil {
+
+	}
 	for {
 		select {
 		case <-ticker:
@@ -270,10 +281,6 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			_, err := cli.Put(context.Background(), key, value)
 			if err != nil {
 				gp.logger.Fatal("failed to put key:", err)
-			}
-			if !flag {
-				close(ch)
-				flag = true
 			}
 		case <-ctx.Done():
 			_, err := cli.Delete(context.Background(), key)
@@ -286,15 +293,14 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-// discover finds out all peers and the groups they owned from etcd every 20 minutes.
-func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch <-chan struct{}) {
+// discover finds out all peers and the groups they owned from etcd when changes happened.
+func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
 	defer wg.Done()
-	<-ch
-	ticker := time.Tick(20 * time.Minute)
+	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
 	for {
 		select {
-		case <-ticker:
-			res, err := cli.Get(context.Background(), "epcache/", clientv3.WithPrefix())
+		case <-watchChan:
+			res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
 			if err != nil {
 				gp.logger.Fatal("failed to retrieve service list:", err)
 			}
