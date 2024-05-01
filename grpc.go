@@ -266,7 +266,7 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// register updates groups owned to the etcd when changed.
+// register will update groups owned to the etcd when change happens.
 func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
@@ -306,11 +306,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-func (gp *GrpcPool) put() {
-
-}
-
-// discover finds out all peers and the groups they owned from etcd when changes happened.
+// discover will find out all peers and the groups they owned from etcd when changes happen.
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
 	defer wg.Done()
 	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
