@@ -29,8 +29,15 @@
 ```
 
 ## Procedure
-```
 
-```
+## Highlights
 
-## Usage 
+## Guide
+
+## Contributing
+
+Issues and Pull Requests are accepted. Feel free to contribute to this project.
+
+## License
+
+[MIT © EndlessParadox1](./LICENSE)
