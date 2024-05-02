@@ -40,7 +40,32 @@
 
 ## Procedure
 
-Too lazy to draw a picture to describe the procedure.
+```
+                         y
+Get -----> cache hit? -----> retrun
+            | n                                  
+            |----> consistent hashing 
+                    |                 y                                 y
+                    |----> remote? -----> load from peer -----> suc? -----> popuate hot cache in 1/10 chance -----> return
+                            | n                                  | n                            y             
+                            |                                    |----> due to non-existent? -----> return error
+                            |                                            | n                                  
+                            |                                            |                            y
+                            |-----------------------------------------> load locally -----> exist? -----> popuate main cache -----> return
+                                                                                             | n                                  
+                                                                                             |----> return error
+OnUpdate/OnDelete -----> opt locally if exist
+                          | go                                  
+                          |----> sync to peers 
+                                  | go all
+                                  |                                      y             
+                                  |----> sync to one peer -----> suc? -----> opt remotely if exist
+                                                                  | n                                  
+                                                                  |----> collet 
+                                                                          | then
+                                                                          |
+                                                                          |----> log all
+```
 
 ## Highlights
 
