@@ -17,41 +17,10 @@ import (
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const defaultReplicas = 50
-
-type protoPeer struct {
-	addr string
-}
-
-func (p *protoPeer) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
-	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable tls
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	client := pb.NewEPCacheClient(conn)
-	return client.Get(ctx, in)
-}
-
-func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
-	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		ch <- errors.New(p.addr)
-		return
-	}
-	defer conn.Close()
-	client := pb.NewEPCacheClient(conn)
-	_, err = client.Sync(context.Background(), data)
-	if err != nil {
-		ch <- errors.New(p.addr)
-		return
-	}
-	ch <- nil
-}
 
 type GrpcPool struct {
 	self     string
@@ -224,11 +193,14 @@ func (gp *GrpcPool) Run() {
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
+	// This ensures that the first service registration from self
+	// can be caught by service discovery's watch.
+	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go gp.register(ctx, &wg, cli)
+	go gp.register(ctx, &wg, cli, ch)
 	wg.Add(1)
-	go gp.discover(ctx, &wg, cli)
+	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
 	sigChan := make(chan os.Signal, 1)
@@ -259,8 +231,8 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// register will update groups owned to the etcd every 20 minutes.
-func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
+// register will update groups owned to the etcd every 30 minutes.
+func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
 	if err != nil {
@@ -270,8 +242,9 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	if err_ != nil {
 		gp.logger.Fatal("failed to keep alive:", err)
 	}
+	<-ch
 	key := gp.prefix + gp.self
-	ticker := time.NewTicker(20 * time.Minute)
+	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
@@ -297,9 +270,10 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 }
 
 // discover will find out all peers and the groups they owned from etcd when changes happen.
-func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client) {
+func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
 	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
+	close(ch)
 	for {
 		select {
 		case <-watchChan:
