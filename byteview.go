@@ -24,7 +24,7 @@ func (bv ByteView) Slice(from, to int) ByteView {
 
 // Equal returns whether the bytes in bv are the same as the bytes in bv2.
 func (bv ByteView) Equal(bv2 ByteView) bool {
-	return bv.EqualBytes(bv2.b)
+	return bytes.Equal(bv.b, bv2.b)
 }
 
 // EqualBytes returns whether the bytes in bv are the same as the bytes b2.
