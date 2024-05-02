@@ -22,23 +22,44 @@
 │   └── singleflight.go: provides a duplicate func call suppression mechanism using Mutex and WaitGroup,
 │                          to avoid cache breakdown.
 ├── byteview.go: implements an immutable view of bytes, used inside the EPCache cluster and presented to users,
-│                  which provides benefit of decoupling from source data and preventing users from 
+│                  which provides benefit of decoupling from data source and preventing users from 
 │                  accidentally modifying the EPCache cluster's data.
 ├── cache.go: wraps a lru cache and its operators, using Mutex to provide concurrent safety 
 │               and recording relevant statistical data. 
-├── epcache.go: 
-├── getter.go: 
-├── grpc.go: 
+├── epcache.go: group, the orgainizational form of data, provides APIs to an EPCache cluster node, 
+│                 like Get, OnUpdate and OnDelete etc. The ratelimiter and bloomfilter here can be enable and
+│                 disabled at any time.
+├── getter.go: provides the interface Getter, which must be implemented by users to access to the data source.
+├── grpc.go: implements GrpcPool as a PeerAgent, which communicates with other nodes using gRPC, 
+│              it will automatically deal with the service registration and discovery work based on etcd,
+│              and of course satrt a gRPC server, all of which support graceful shutdown.
 ├── peers.go: provides the interface standards of ProtoPeer and PeerAgent, which are responsible for
-│               the interation work among the EPCache cluster nodes; also implements a PeerAgent: NoPeer.
-└── protopeer.go: 
+│               the interation work among the EPCache cluster nodes; also implements NoPeer as a PeerAgent.
+└── protopeer.go: implements protoPeer as a ProtoPeer with a gRPC client, which is used by GrpcPool.
 ```
 
 ## Procedure
 
+Too lazy to draw a picture to describe the procedure.
+
 ## Highlights
 
+1. Using gRPC/ProtoBuf to achieve efficient communication between nodes: request forwarding and data synchronization.
+2. Implementing cache elimination strategy based on LRU, and implement load balancing based on consistent hashing.
+3. Using mutexes and semaphores to prevent cache penetration, and providing bloom filters to prevent cache penetration.
+4. Providing the token bucket algorithm to limit the request flow of the cache system.
+5. Implementing service registration and service discovery based on etcd to achieve synchronization 
+   when nodes and their groups are dynamically adjusted.
+
 ## Guide
+
+1. You can build up a cache system as you like by importing this module.
+2. Getter is implemented by you, a normal one might be using DB as data source.
+3. ProtoPeer and PeerAgent can also be implemented by you, and using protoPeer and GrpcPool is recommended
+   when attempting to build up a cluster, as well as NoPeer when you just need standalone one.
+4. Set up ratelimiter and bloomfilter when you need them.
+5. The GrpcPool will log something important when up.
+6. An API server is the best practise to be built in front of an EPCache cluster node.
 
 ## Contributing
 
