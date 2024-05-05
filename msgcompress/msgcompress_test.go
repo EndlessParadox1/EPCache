@@ -14,9 +14,12 @@ func TestNew(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
-	i := 0
-	for range mc.Out {
-		fmt.Print(i, " ")
-		i++
-	}
+	go func() {
+		i := 0
+		for range mc.Out {
+			fmt.Println(i)
+			i++
+		}
+	}()
+	time.Sleep(12 * time.Second)
 }

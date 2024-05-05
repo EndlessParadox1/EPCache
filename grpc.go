@@ -3,6 +3,7 @@ package epcache
 import (
 	"context"
 	"errors"
+	"github.com/EndlessParadox1/epcache/msgcompress"
 	"log"
 	"net"
 	"os"
@@ -30,9 +31,9 @@ type GrpcPool struct {
 	logger   *log.Logger
 	pb.UnimplementedEPCacheServer
 
-	muGroups sync.RWMutex
-	groups   map[string]bool
-	ch       chan struct{}
+	muGroups             sync.RWMutex
+	groups               map[string]bool
+	rgsMsgCps, dscMsgCps *msgcompress.MsgCompressor
 
 	muPeers    sync.RWMutex
 	peers      map[string]*consistenthash.Map // maps groups to different hash rings
@@ -56,12 +57,13 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 	}
 	grpcPoolExist = true
 	gp := &GrpcPool{
-		self:     self,
-		prefix:   prefix,
-		registry: registry,
-		logger:   log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		groups:   make(map[string]bool),
-		ch:       make(chan struct{}), // TODO
+		self:      self,
+		prefix:    prefix,
+		registry:  registry,
+		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
+		groups:    make(map[string]bool),
+		rgsMsgCps: msgcompress.New(2 * time.Second), // TODO
+		dscMsgCps: msgcompress.New(2 * time.Second),
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -117,14 +119,14 @@ func (gp *GrpcPool) EnrollGroup(group string) {
 	gp.muGroups.Lock()
 	gp.groups[group] = true
 	gp.muGroups.Unlock()
-	gp.ch <- struct{}{}
+	gp.rgsMsgCps.In <- struct{}{}
 }
 
 func (gp *GrpcPool) WithDrawGroup(group string) {
 	gp.muGroups.Lock()
 	delete(gp.groups, group)
 	gp.muGroups.Unlock()
-	gp.ch <- struct{}{}
+	gp.rgsMsgCps.In <- struct{}{}
 }
 
 func (gp *GrpcPool) listGroups() string {
@@ -227,8 +229,8 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	pb.RegisterEPCacheServer(server, gp)
 	go func() {
 		<-ctx.Done()
-		gp.logger.Println("Shutting down gRPC server...")
 		server.GracefulStop()
+		gp.logger.Println("gRPC server stopped")
 	}()
 	gp.logger.Println("GrpcPool listening at", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
@@ -255,17 +257,14 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			if !ok {
 				gp.logger.Fatal("failed to maintain lease")
 			}
-		case <-gp.ch:
+		case <-gp.rgsMsgCps.Out:
 			value := gp.listGroups()
 			_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
 			if err != nil {
 				gp.logger.Fatal("failed to put key:", err)
 			}
 		case <-ctx.Done():
-			_, err = cli.Revoke(context.Background(), lease.ID)
-			if err != nil {
-				gp.logger.Println("failed to proactively revoke lease:", err)
-			}
+			cli.Revoke(context.Background(), lease.ID)
 			gp.logger.Println("Service register stopped")
 			return
 		}
@@ -275,11 +274,17 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 // discover will find out all peers and the groups they owned from etcd when changes happen.
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
-	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
+	ctx_, cancel := context.WithCancel(context.Background())
+	watchChan := cli.Watch(ctx_, gp.prefix, clientv3.WithPrefix())
 	close(ch)
+	go func() {
+		for range watchChan {
+			gp.dscMsgCps.In <- struct{}{}
+		}
+	}()
 	for {
 		select {
-		case <-watchChan:
+		case <-gp.dscMsgCps.Out:
 			res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
 			if err != nil {
 				gp.logger.Fatal("failed to retrieve service list:", err)
@@ -300,6 +305,7 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			gp.setPeers(m)
 			gp.muPeers.Unlock()
 		case <-ctx.Done():
+			cancel()
 			gp.logger.Println("Service discovery stopped")
 			return
 		}

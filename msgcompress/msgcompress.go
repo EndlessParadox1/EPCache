@@ -20,13 +20,12 @@ func New(delay time.Duration) *MsgCompressor {
 
 func (mc *MsgCompressor) run() {
 	var msg []struct{}
-	ticker := time.NewTicker(mc.delay)
-	defer ticker.Stop()
+	ticker := time.Tick(mc.delay)
 	for {
 		select {
 		case <-mc.In:
 			msg = append(msg, struct{}{})
-		case <-ticker.C:
+		case <-ticker:
 			if len(msg) > 0 {
 				mc.Out <- struct{}{}
 				msg = nil
