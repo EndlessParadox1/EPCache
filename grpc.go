@@ -32,6 +32,7 @@ type GrpcPool struct {
 
 	muGroups sync.RWMutex
 	groups   map[string]bool
+	ch       chan struct{}
 
 	muPeers    sync.RWMutex
 	peers      map[string]*consistenthash.Map // maps groups to different hash rings
@@ -56,10 +57,11 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 	grpcPoolExist = true
 	gp := &GrpcPool{
 		self:     self,
-		groups:   make(map[string]bool),
-		logger:   log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		prefix:   prefix,
 		registry: registry,
+		logger:   log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
+		groups:   make(map[string]bool),
+		ch:       make(chan struct{}), // TODO
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -67,6 +69,7 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 	if gp.opts.Replicas == 0 {
 		gp.opts.Replicas = defaultReplicas
 	}
+	go gp.run()
 	return gp
 }
 
@@ -114,12 +117,14 @@ func (gp *GrpcPool) EnrollGroup(group string) {
 	gp.muGroups.Lock()
 	gp.groups[group] = true
 	gp.muGroups.Unlock()
+	gp.ch <- struct{}{}
 }
 
 func (gp *GrpcPool) WithDrawGroup(group string) {
 	gp.muGroups.Lock()
 	delete(gp.groups, group)
 	gp.muGroups.Unlock()
+	gp.ch <- struct{}{}
 }
 
 func (gp *GrpcPool) listGroups() string {
@@ -182,8 +187,8 @@ func (gp *GrpcPool) Sync(_ context.Context, data *pb.SyncData) (out *emptypb.Emp
 	return
 }
 
-// Run starts a node of the EPCache cluster.
-func (gp *GrpcPool) Run() {
+// run starts a node of the EPCache cluster.
+func (gp *GrpcPool) run() {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   gp.registry,
 		DialTimeout: 5 * time.Second,
@@ -244,15 +249,13 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 	<-ch
 	key := gp.prefix + gp.self
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
 	for {
 		select {
 		case _, ok := <-leaseResCh:
 			if !ok {
 				gp.logger.Fatal("failed to maintain lease")
 			}
-		case <-ticker.C:
+		case <-gp.ch:
 			value := gp.listGroups()
 			_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
 			if err != nil {
