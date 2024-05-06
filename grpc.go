@@ -3,7 +3,7 @@ package epcache
 import (
 	"context"
 	"errors"
-	"github.com/EndlessParadox1/epcache/msgcompress"
+	"github.com/EndlessParadox1/epcache/msgctl"
 	"log"
 	"net"
 	"os"
@@ -33,7 +33,7 @@ type GrpcPool struct {
 
 	muGroups             sync.RWMutex
 	groups               map[string]bool
-	rgsMsgCps, dscMsgCps *msgcompress.MsgCompressor
+	rgsMsgCps, dscMsgCps *msgctl.MsgController
 
 	muPeers    sync.RWMutex
 	peers      map[string]*consistenthash.Map // maps groups to different hash rings
@@ -62,8 +62,8 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 		registry:  registry,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		groups:    make(map[string]bool),
-		rgsMsgCps: msgcompress.New(2 * time.Second), // TODO
-		dscMsgCps: msgcompress.New(2 * time.Second),
+		rgsMsgCps: msgctl.New(2 * time.Second), // TODO
+		dscMsgCps: msgctl.New(2 * time.Second),
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -274,8 +274,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 // discover will find out all peers and the groups they owned from etcd when changes happen.
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
-	ctx_, cancel := context.WithCancel(context.Background())
-	watchChan := cli.Watch(ctx_, gp.prefix, clientv3.WithPrefix())
+	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
 	close(ch)
 	go func() {
 		for range watchChan {
@@ -305,7 +304,6 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			gp.setPeers(m)
 			gp.muPeers.Unlock()
 		case <-ctx.Done():
-			cancel()
 			gp.logger.Println("Service discovery stopped")
 			return
 		}

@@ -1,7 +1,6 @@
-package msgcompress
+package msgctl
 
 import (
-	"fmt"
 	"testing"
 	"time"
 )
@@ -14,12 +13,14 @@ func TestNew(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
+	var msgs []struct{}
 	go func() {
-		i := 0
 		for range mc.Out {
-			fmt.Println(i)
-			i++
+			msgs = append(msgs, struct{}{})
 		}
 	}()
 	time.Sleep(12 * time.Second)
+	if len(msgs) != 6 {
+		t.Fatalf("messages reduced into %d, want 6", len(msgs))
+	}
 }
