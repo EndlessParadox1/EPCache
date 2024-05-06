@@ -33,7 +33,7 @@ type GrpcPool struct {
 
 	muGroups             sync.RWMutex
 	groups               map[string]bool
-	rgsMsgCps, dscMsgCps *msgctl.MsgController
+	rgsMsgCon, dscMsgCon *msgctl.MsgController
 
 	muPeers    sync.RWMutex
 	peers      map[string]*consistenthash.Map // maps groups to different hash rings
@@ -62,8 +62,8 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 		registry:  registry,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		groups:    make(map[string]bool),
-		rgsMsgCps: msgctl.New(2 * time.Second), // TODO
-		dscMsgCps: msgctl.New(2 * time.Second),
+		rgsMsgCon: msgctl.New(2 * time.Second), // TODO
+		dscMsgCon: msgctl.New(2 * time.Second),
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -119,14 +119,14 @@ func (gp *GrpcPool) EnrollGroup(group string) {
 	gp.muGroups.Lock()
 	gp.groups[group] = true
 	gp.muGroups.Unlock()
-	gp.rgsMsgCps.In <- struct{}{}
+	gp.rgsMsgCon.Send()
 }
 
 func (gp *GrpcPool) WithDrawGroup(group string) {
 	gp.muGroups.Lock()
 	delete(gp.groups, group)
 	gp.muGroups.Unlock()
-	gp.rgsMsgCps.In <- struct{}{}
+	gp.rgsMsgCon.Send()
 }
 
 func (gp *GrpcPool) listGroups() string {
@@ -257,7 +257,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			if !ok {
 				gp.logger.Fatal("failed to maintain lease")
 			}
-		case <-gp.rgsMsgCps.Out:
+		case <-gp.rgsMsgCon.Recv():
 			value := gp.listGroups()
 			_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
 			if err != nil {
@@ -278,12 +278,12 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	close(ch)
 	go func() {
 		for range watchChan {
-			gp.dscMsgCps.In <- struct{}{}
+			gp.dscMsgCon.Send()
 		}
 	}()
 	for {
 		select {
-		case <-gp.dscMsgCps.Out:
+		case <-gp.dscMsgCon.Recv():
 			res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
 			if err != nil {
 				gp.logger.Fatal("failed to retrieve service list:", err)
