@@ -4,14 +4,13 @@ package epcache
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
-	"sync"
-	"sync/atomic"
-
 	"github.com/EndlessParadox1/epcache/bloomfilter"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/singleflight"
 	"github.com/juju/ratelimit"
+	"math/rand/v2"
+	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -74,8 +73,9 @@ type Group struct {
 	limitMode LimitMode
 	limiter   *ratelimit.Bucket
 
-	muFilter sync.RWMutex
-	filter   *bloomfilter.BloomFilter
+	muGuard   sync.RWMutex
+	guardMode GuardMode
+	filter    *bloomfilter.BloomFilter
 
 	Stats Stats
 }
@@ -138,18 +138,32 @@ func (g *Group) ResetLimiter() {
 	g.limiter = nil
 }
 
+type GuardMode int
+
+const (
+	NoGuard GuardMode = iota
+	FilterMode
+	DummyMode
+)
+
 // SetFilter sets a bloom filter, zero size for none.
 // It calculates the required params to build a bloom filter, false positive rate of which will
 // be lower than 0.01%, according to user's expected blacklist size.
 func (g *Group) SetFilter(size uint32) {
-	g.muFilter.Lock()
-	defer g.muFilter.Unlock()
+	g.muGuard.Lock()
+	defer g.muGuard.Unlock()
 	if size == 0 {
 		g.filter = nil
 	} else {
 		g.filter = bloomfilter.New(20*size, 13)
 	}
 	g.Stats.LenBlacklist = 0
+}
+
+func (g *Group) SetDummy() {
+	g.muGuard.Lock()
+	defer g.muGuard.Unlock()
+
 }
 
 func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
@@ -176,9 +190,9 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 		return value, nil
 	}
 	if g.filter != nil {
-		g.muFilter.RLock()
+		g.muGuard.RLock()
 		ret := g.filter.MightContain(key)
-		g.muFilter.RUnlock()
+		g.muGuard.RUnlock()
 		if ret {
 			return ByteView{}, errors.New("forbidden key")
 		}
@@ -218,10 +232,10 @@ func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
 	})
 	if err != nil {
 		if g.filter != nil && errors.Is(err, ErrNotFound) {
-			g.muFilter.Lock()
+			g.muGuard.Lock()
 			g.filter.Add(key)
 			g.Stats.LenBlacklist++
-			g.muFilter.Unlock()
+			g.muGuard.Unlock()
 		}
 		return ByteView{}, err
 	}
