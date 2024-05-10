@@ -1,7 +1,5 @@
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package epcachepb;
 
 option go_package = "github.com/EndlessParadox1/epcache/epcachepb";
@@ -22,7 +20,6 @@ message SyncData {
 
 service EPCache {
     rpc Get(Request) returns (Response);
-    rpc Sync(stream SyncData) returns (google.protobuf.Empty);
 }
 
 // In this dir, run `protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative *.proto`

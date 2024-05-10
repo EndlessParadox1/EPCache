@@ -2,6 +2,7 @@ package epcache
 
 import (
 	"context"
+	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/EndlessParadox1/epcache/consistenthash"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/msgctl"
+	"github.com/streadway/amqp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 )
@@ -27,6 +29,9 @@ type GrpcPool struct {
 	opts     GrpcPoolOptions
 	logger   *log.Logger
 	pb.UnimplementedEPCacheServer
+
+	ch       chan *pb.SyncData
+	msgQueue string
 
 	node                 *Node
 	rgsMsgCon, dscMsgCon *msgctl.MsgController
@@ -84,31 +89,118 @@ func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 
 // SyncAll trys to sync data to all peers in an async way, and logs error if any.
 func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
-	gp.muPeers.RLock()
-	defer gp.muPeers.RUnlock()
-	if gp.peers == nil {
-		return
-	}
-	ch := make(chan error)
-	count := 0
-	for _, peer := range gp.protoPeers {
-		go peer.SyncOne(data, ch)
-		count++
-	}
-	var failSyncPeers []string
-	for err := range ch {
-		if err != nil {
-			failSyncPeers = append(failSyncPeers, err.Error())
-		}
-		count--
-		if count == 0 {
-			break
-		}
-	}
-	if len(failSyncPeers) > 0 {
-		gp.logger.Println("failed to sync to these peers:", failSyncPeers)
-	}
+	gp.ch <- data
 }
+
+func (gp *GrpcPool) producer() {
+	conn, err := amqp.Dial(gp.msgQueue)
+	if err != nil {
+		gp.logger.Fatal("failed to connect to MQ:", err)
+	}
+	defer conn.Close()
+	ch, err_ := conn.Channel()
+	if err_ != nil {
+		gp.logger.Fatal("failed to open a channel:", err)
+	}
+	defer ch.Close()
+	err = ch.ExchangeDeclare(
+		"epcache",
+		"fanout",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		gp.logger.Fatal("failed to declare an exchange:", err)
+	}
+	for {
+		data := <-gp.ch
+		body, _ := proto.Marshal(data)
+		err = ch.Publish(
+			"epcache",
+			"",
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Body:        body,
+			},
+		)
+		if err != nil {
+			log.Fatal("failed to publish a message:", err)
+		}
+	}
+} // TODO
+
+func (gp *GrpcPool) consumer() {
+	conn, err := amqp.Dial(gp.msgQueue)
+	if err != nil {
+		gp.logger.Fatal("failed to connect to MQ:", err)
+	}
+	defer conn.Close()
+	ch, err_ := conn.Channel()
+	if err_ != nil {
+		gp.logger.Fatal("failed to open a channel:", err_)
+	}
+	defer ch.Close()
+	err = ch.ExchangeDeclare(
+		"epcache",
+		"fanout",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		gp.logger.Fatal("failed to declare an exchange:", err)
+	}
+	q, _err := ch.QueueDeclare(
+		"",
+		false,
+		false,
+		true,
+		false,
+		nil,
+	)
+	if _err != nil {
+		gp.logger.Fatal("failed to declare a queue:", err)
+	}
+	err = ch.QueueBind(
+		q.Name,
+		"",
+		"epcache",
+		false,
+		nil,
+	)
+	if err != nil {
+		gp.logger.Fatalf("failed to bind queue to exchange: %v", err)
+	}
+	msgs, err1 := ch.Consume(
+		q.Name,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err1 != nil {
+		gp.logger.Fatal("failed to consume messages:", err1)
+	}
+	for msg := range msgs {
+		var data pb.SyncData
+		proto.Unmarshal(msg.Body, &data)
+		switch data.GetMethod() {
+		case "U":
+			go gp.node.update(data.GetKey(), data.GetValue())
+		case "R":
+			go gp.node.remove(data.GetKey())
+		}
+	}
+} // TODO
 
 func (gp *GrpcPool) SetNode(node *Node) {
 	gp.node = node
@@ -138,21 +230,6 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return out, nil
 }
 
-func (gp *GrpcPool) Sync(stream pb.EPCache_SyncServer) (err error) {
-	for {
-		data, err_ := stream.Recv()
-		if err_ != nil {
-			return err_
-		}
-		switch data.GetMethod() {
-		case "U":
-			gp.node.update(data.GetKey(), data.GetValue())
-		case "R":
-			gp.node.remove(data.GetKey())
-		}
-	}
-}
-
 // run starts a node of the EPCache cluster.
 func (gp *GrpcPool) run() {
 	cli, err := clientv3.New(clientv3.Config{
@@ -174,6 +251,7 @@ func (gp *GrpcPool) run() {
 	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
+	go gp.producer() // TODO
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan

@@ -9,8 +9,6 @@ import (
 type ProtoPeer interface {
 	// Get loads data from remote using gRPC.
 	Get(ctx context.Context, in *pb.Request) (*pb.Response, error)
-	// SyncOne trys to sync data to remote using gRPC.
-	SyncOne(data *pb.SyncData, ch chan<- error)
 }
 
 type PeerAgent interface {

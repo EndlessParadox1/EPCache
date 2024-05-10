@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/juju/ratelimit v1.0.2
 	github.com/spaolacci/murmur3 v1.1.0
+	github.com/streadway/amqp v1.1.0
 	go.etcd.io/etcd/client/v3 v3.5.13
 	google.golang.org/grpc v1.63.2
 	google.golang.org/protobuf v1.34.1

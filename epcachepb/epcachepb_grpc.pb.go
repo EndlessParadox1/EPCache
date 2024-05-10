@@ -11,7 +11,6 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -24,7 +23,6 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EPCacheClient interface {
 	Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
-	Sync(ctx context.Context, opts ...grpc.CallOption) (EPCache_SyncClient, error)
 }
 
 type ePCacheClient struct {
@@ -44,46 +42,11 @@ func (c *ePCacheClient) Get(ctx context.Context, in *Request, opts ...grpc.CallO
 	return out, nil
 }
 
-func (c *ePCacheClient) Sync(ctx context.Context, opts ...grpc.CallOption) (EPCache_SyncClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EPCache_ServiceDesc.Streams[0], "/epcachepb.EPCache/Sync", opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &ePCacheSyncClient{stream}
-	return x, nil
-}
-
-type EPCache_SyncClient interface {
-	Send(*SyncData) error
-	CloseAndRecv() (*emptypb.Empty, error)
-	grpc.ClientStream
-}
-
-type ePCacheSyncClient struct {
-	grpc.ClientStream
-}
-
-func (x *ePCacheSyncClient) Send(m *SyncData) error {
-	return x.ClientStream.SendMsg(m)
-}
-
-func (x *ePCacheSyncClient) CloseAndRecv() (*emptypb.Empty, error) {
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	m := new(emptypb.Empty)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
 // EPCacheServer is the server API for EPCache service.
 // All implementations must embed UnimplementedEPCacheServer
 // for forward compatibility
 type EPCacheServer interface {
 	Get(context.Context, *Request) (*Response, error)
-	Sync(EPCache_SyncServer) error
 	mustEmbedUnimplementedEPCacheServer()
 }
 
@@ -93,9 +56,6 @@ type UnimplementedEPCacheServer struct {
 
 func (UnimplementedEPCacheServer) Get(context.Context, *Request) (*Response, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
-}
-func (UnimplementedEPCacheServer) Sync(EPCache_SyncServer) error {
-	return status.Errorf(codes.Unimplemented, "method Sync not implemented")
 }
 func (UnimplementedEPCacheServer) mustEmbedUnimplementedEPCacheServer() {}
 
@@ -128,32 +88,6 @@ func _EPCache_Get_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EPCache_Sync_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(EPCacheServer).Sync(&ePCacheSyncServer{stream})
-}
-
-type EPCache_SyncServer interface {
-	SendAndClose(*emptypb.Empty) error
-	Recv() (*SyncData, error)
-	grpc.ServerStream
-}
-
-type ePCacheSyncServer struct {
-	grpc.ServerStream
-}
-
-func (x *ePCacheSyncServer) SendAndClose(m *emptypb.Empty) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func (x *ePCacheSyncServer) Recv() (*SyncData, error) {
-	m := new(SyncData)
-	if err := x.ServerStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
 // EPCache_ServiceDesc is the grpc.ServiceDesc for EPCache service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -166,12 +100,6 @@ var EPCache_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EPCache_Get_Handler,
 		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "Sync",
-			Handler:       _EPCache_Sync_Handler,
-			ClientStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "epcachepb.proto",
 }
