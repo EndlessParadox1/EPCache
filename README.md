@@ -1,5 +1,6 @@
 # EPCache
 
+> EPCache is Endless Paradox's cache, Experiment-Purpose cache and Enhanced-Performance cache. 
 > A lightweight and highly customizable distributed cache system construction package implemented by golang. 
 > Data synchronization between nodes is asynchronous, with high concurrent access capabilities and ease of use.
 

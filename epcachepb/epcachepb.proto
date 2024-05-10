@@ -7,8 +7,7 @@ package epcachepb;
 option go_package = "github.com/EndlessParadox1/epcache/epcachepb";
 
 message Request {
-    string group = 1;
-    string key = 2;
+    string key = 1;
 }
 
 message Response {
@@ -17,14 +16,13 @@ message Response {
 
 message SyncData {
     string method = 1;
-    string group = 2;
-    string key = 3;
-    bytes value = 4;
+    string key = 2;
+    bytes value = 3;
 }
 
 service EPCache {
     rpc Get(Request) returns (Response);
-    rpc Sync(SyncData) returns (google.protobuf.Empty);
+    rpc Sync(stream SyncData) returns (google.protobuf.Empty);
 }
 
 // In this dir, run `protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative *.proto`

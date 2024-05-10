@@ -3,6 +3,7 @@ package epcache
 import (
 	"context"
 	"errors"
+	"log"
 
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"google.golang.org/grpc"
@@ -31,8 +32,16 @@ func (p *protoPeer) SyncOne(data *pb.SyncData, ch chan<- error) {
 	}
 	defer conn.Close()
 	client := pb.NewEPCacheClient(conn)
-	_, err = client.Sync(context.Background(), data)
-	if err != nil {
+	stream, err_ := client.Sync(context.Background())
+	if err_ != nil {
+		log.Fatal(err) // TODO
+	}
+	for _, point := range points {
+		if err := stream.Send(point); err != nil {
+			log.Fatalf("client.RecordRoute: stream.Send(%v) failed: %v", point, err)
+		}
+	}
+	if err_ != nil {
 		ch <- errors.New(p.addr)
 		return
 	}

@@ -2,13 +2,10 @@ package epcache
 
 import (
 	"context"
-	"errors"
-	"github.com/EndlessParadox1/epcache/msgctl"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -16,9 +13,9 @@ import (
 
 	"github.com/EndlessParadox1/epcache/consistenthash"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
+	"github.com/EndlessParadox1/epcache/msgctl"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const defaultReplicas = 50
@@ -31,13 +28,12 @@ type GrpcPool struct {
 	logger   *log.Logger
 	pb.UnimplementedEPCacheServer
 
-	muGroups             sync.RWMutex
-	groups               map[string]bool
+	node                 *Node
 	rgsMsgCon, dscMsgCon *msgctl.MsgController
 
 	muPeers    sync.RWMutex
-	peers      map[string]*consistenthash.Map // maps groups to different hash rings
-	protoPeers map[string]*protoPeer          // keys like "localhost:8080"
+	peers      *consistenthash.Map
+	protoPeers map[string]*protoPeer // keys like "localhost:8080"
 }
 
 type GrpcPoolOptions struct {
@@ -61,7 +57,6 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 		prefix:    prefix,
 		registry:  registry,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		groups:    make(map[string]bool),
 		rgsMsgCon: msgctl.New(2 * time.Second), // TODO
 		dscMsgCon: msgctl.New(2 * time.Second),
 	}
@@ -75,13 +70,13 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 	return gp
 }
 
-func (gp *GrpcPool) PickPeer(group, key string) (ProtoPeer, bool) {
+func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 	gp.muPeers.RLock()
 	defer gp.muPeers.RUnlock()
 	if gp.peers == nil {
 		return nil, false
 	}
-	if peer := gp.peers[group].Get(key); peer != gp.self {
+	if peer := gp.peers.Get(key); peer != gp.self {
 		return gp.protoPeers[peer], true
 	}
 	return nil, false
@@ -115,34 +110,8 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	}
 }
 
-func (gp *GrpcPool) EnrollGroup(group string) {
-	gp.muGroups.Lock()
-	gp.groups[group] = true
-	gp.muGroups.Unlock()
-	gp.rgsMsgCon.Send()
-}
-
-func (gp *GrpcPool) WithDrawGroup(group string) {
-	gp.muGroups.Lock()
-	delete(gp.groups, group)
-	gp.muGroups.Unlock()
-	gp.rgsMsgCon.Send()
-}
-
-func (gp *GrpcPool) listGroups() string {
-	gp.muGroups.RLock()
-	defer gp.muGroups.RUnlock()
-	var ans []string
-	for group := range groups {
-		ans = append(ans, group)
-	}
-	return strings.Join(ans, " ")
-}
-
-func (gp *GrpcPool) hasGroup(group string) bool {
-	gp.muGroups.RLock()
-	defer gp.muGroups.RUnlock()
-	return gp.groups[group]
+func (gp *GrpcPool) SetNode(node *Node) {
+	gp.node = node
 }
 
 func (gp *GrpcPool) ListPeers() (ans []string) {
@@ -160,13 +129,8 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 // Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
-	groupName := in.GetGroup()
-	group := GetGroup(groupName)
-	if group == nil {
-		return nil, errors.New("no such group: " + groupName)
-	}
-	atomic.AddInt64(&group.Stats.PeerReqs, 1)
-	val, err := group.Get(ctx, in.GetKey())
+	atomic.AddInt64(&gp.node.Stats.PeerReqs, 1)
+	val, err := gp.node.Get(ctx, in.GetKey())
 	if err != nil {
 		return nil, err
 	}
@@ -174,19 +138,19 @@ func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, erro
 	return out, nil
 }
 
-func (gp *GrpcPool) Sync(_ context.Context, data *pb.SyncData) (out *emptypb.Empty, err error) {
-	groupName := data.GetGroup()
-	group := GetGroup(groupName)
-	if group == nil {
-		return
+func (gp *GrpcPool) Sync(stream pb.EPCache_SyncServer) (err error) {
+	for {
+		data, err_ := stream.Recv()
+		if err_ != nil {
+			return err_
+		}
+		switch data.GetMethod() {
+		case "U":
+			gp.node.update(data.GetKey(), data.GetValue())
+		case "R":
+			gp.node.remove(data.GetKey())
+		}
 	}
-	switch data.GetMethod() {
-	case "U":
-		go group.update(data.GetKey(), data.GetValue())
-	case "R":
-		go group.remove(data.GetKey())
-	}
-	return
 }
 
 // run starts a node of the EPCache cluster.
@@ -258,8 +222,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 				gp.logger.Fatal("failed to maintain lease")
 			}
 		case <-gp.rgsMsgCon.Recv():
-			value := gp.listGroups()
-			_, err = cli.Put(context.Background(), key, value, clientv3.WithLease(lease.ID))
+			_, err = cli.Put(context.Background(), key, "", clientv3.WithLease(lease.ID))
 			if err != nil {
 				gp.logger.Fatal("failed to put key:", err)
 			}
@@ -288,21 +251,11 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			if err != nil {
 				gp.logger.Fatal("failed to retrieve service list:", err)
 			}
-			m := make(map[string][]string) // maps group to addrs
-			gp.muPeers.Lock()
-			gp.protoPeers = make(map[string]*protoPeer)
+			var addrs []string
 			for _, kv := range res.Kvs {
-				addr := string(kv.Key)
-				groups_ := strings.Split(string(kv.Value), " ")
-				if addr != gp.self {
-					gp.protoPeers[addr] = &protoPeer{addr}
-				}
-				for _, group := range groups_ {
-					m[group] = append(m[group], addr)
-				}
+				addrs = append(addrs, string(kv.Key))
 			}
-			gp.setPeers(m)
-			gp.muPeers.Unlock()
+			gp.setPeers(addrs)
 		case <-ctx.Done():
 			gp.logger.Println("Service discovery stopped")
 			return
@@ -310,12 +263,15 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-func (gp *GrpcPool) setPeers(m map[string][]string) {
-	gp.peers = make(map[string]*consistenthash.Map)
-	for group, addrs := range m {
-		if gp.hasGroup(group) {
-			gp.peers[group] = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
-			gp.peers[group].Add(addrs...)
+func (gp *GrpcPool) setPeers(addrs []string) {
+	gp.muPeers.Lock()
+	defer gp.muPeers.Unlock()
+	gp.protoPeers = make(map[string]*protoPeer)
+	for _, addr := range addrs {
+		if addr != gp.self {
+			gp.protoPeers[addr] = &protoPeer{addr}
 		}
 	}
+	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
+	gp.peers.Add(addrs...)
 }
