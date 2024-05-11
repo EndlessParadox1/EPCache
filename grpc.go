@@ -52,7 +52,7 @@ var grpcPoolExist bool
 //
 //	prefix: The working directory of the EPCache cluster.
 //	registry: The listening addresses of the etcd cluster.
-func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) *GrpcPool {
+func NewGrpcPool(self, prefix string, registry []string, msgQueue string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
 	}
@@ -61,6 +61,7 @@ func NewGrpcPool(self, prefix string, registry []string, opts *GrpcPoolOptions) 
 		self:      self,
 		prefix:    prefix,
 		registry:  registry,
+		msgQueue:  msgQueue,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		rgsMsgCon: msgctl.New(2 * time.Second), // TODO
 		dscMsgCon: msgctl.New(2 * time.Second),
