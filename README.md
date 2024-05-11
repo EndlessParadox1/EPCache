@@ -91,6 +91,11 @@ OnUpdate/OnDelete -----> opt locally if exist
 
 Issues and Pull Requests are accepted. Feel free to contribute to this project.
 
+# Benchmark
+
+* 5.6w qps on standalone mode.
+
+
 ## License
 
 [MIT © EndlessParadox1](./LICENSE)

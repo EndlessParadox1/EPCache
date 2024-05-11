@@ -59,6 +59,7 @@ func (c *cache) get(key string) (value ByteView, ok bool) {
 	atomic.AddInt64(&c.nget, 1)
 	c.mu.RLock()
 	if c.lru == nil {
+		c.mu.RUnlock()
 		return
 	}
 	val, hit := c.lru.Get(key)
