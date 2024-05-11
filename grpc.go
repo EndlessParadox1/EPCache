@@ -2,11 +2,13 @@ package epcache
 
 import (
 	"context"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -336,7 +338,7 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			}
 			var addrs []string
 			for _, kv := range res.Kvs {
-				addrs = append(addrs, string(kv.Key))
+				addrs = append(addrs, strings.TrimPrefix(string(kv.Key), gp.prefix))
 			}
 			gp.setPeers(addrs)
 		case <-ctx.Done():
@@ -352,6 +354,7 @@ func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.protoPeers = make(map[string]*protoPeer)
 	for _, addr := range addrs {
 		if addr != gp.self {
+			fmt.Println(addr)
 			gp.protoPeers[addr] = newProtoPeer(addr)
 		}
 	}
