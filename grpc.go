@@ -33,8 +33,8 @@ type GrpcPool struct {
 	ch       chan *pb.SyncData
 	msgQueue string
 
-	node                 *Node
-	rgsMsgCon, dscMsgCon *msgctl.MsgController
+	node      *Node
+	dscMsgCon *msgctl.MsgController
 
 	muPeers    sync.RWMutex
 	peers      *consistenthash.Map
@@ -63,8 +63,7 @@ func NewGrpcPool(self, prefix string, registry []string, msgQueue string, opts *
 		registry:  registry,
 		msgQueue:  msgQueue,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		rgsMsgCon: msgctl.New(2 * time.Second), // TODO
-		dscMsgCon: msgctl.New(2 * time.Second),
+		dscMsgCon: msgctl.New(2 * time.Second), // TODO
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -253,6 +252,7 @@ func (gp *GrpcPool) run() {
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
 	go gp.producer() // TODO
+	go gp.consumer()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
@@ -294,16 +294,16 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 	<-ch
 	key := gp.prefix + gp.self
+	_, err = cli.Put(context.Background(), key, "", clientv3.WithLease(lease.ID))
+	gp.logger.Println("put self")
+	if err != nil {
+		gp.logger.Fatal("failed to put key:", err)
+	}
 	for {
 		select {
 		case _, ok := <-leaseResCh:
 			if !ok {
 				gp.logger.Fatal("failed to maintain lease")
-			}
-		case <-gp.rgsMsgCon.Recv():
-			_, err = cli.Put(context.Background(), key, "", clientv3.WithLease(lease.ID))
-			if err != nil {
-				gp.logger.Fatal("failed to put key:", err)
 			}
 		case <-ctx.Done():
 			cli.Revoke(context.Background(), lease.ID)

@@ -93,7 +93,7 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
 
 # Benchmark
 
-* 5.6w qps on standalone mode.
+* On standalone mode: 56k qps for non-existent keys, and 143k qps for existing keys.
 
 
 ## License
