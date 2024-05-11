@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EPCacheClient interface {
-	Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
+	Get(ctx context.Context, opts ...grpc.CallOption) (EPCache_GetClient, error)
 }
 
 type ePCacheClient struct {
@@ -33,20 +33,42 @@ func NewEPCacheClient(cc grpc.ClientConnInterface) EPCacheClient {
 	return &ePCacheClient{cc}
 }
 
-func (c *ePCacheClient) Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
-	out := new(Response)
-	err := c.cc.Invoke(ctx, "/epcachepb.EPCache/Get", in, out, opts...)
+func (c *ePCacheClient) Get(ctx context.Context, opts ...grpc.CallOption) (EPCache_GetClient, error) {
+	stream, err := c.cc.NewStream(ctx, &EPCache_ServiceDesc.Streams[0], "/epcachepb.EPCache/Get", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &ePCacheGetClient{stream}
+	return x, nil
+}
+
+type EPCache_GetClient interface {
+	Send(*Request) error
+	Recv() (*Response, error)
+	grpc.ClientStream
+}
+
+type ePCacheGetClient struct {
+	grpc.ClientStream
+}
+
+func (x *ePCacheGetClient) Send(m *Request) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *ePCacheGetClient) Recv() (*Response, error) {
+	m := new(Response)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // EPCacheServer is the server API for EPCache service.
 // All implementations must embed UnimplementedEPCacheServer
 // for forward compatibility
 type EPCacheServer interface {
-	Get(context.Context, *Request) (*Response, error)
+	Get(EPCache_GetServer) error
 	mustEmbedUnimplementedEPCacheServer()
 }
 
@@ -54,8 +76,8 @@ type EPCacheServer interface {
 type UnimplementedEPCacheServer struct {
 }
 
-func (UnimplementedEPCacheServer) Get(context.Context, *Request) (*Response, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+func (UnimplementedEPCacheServer) Get(EPCache_GetServer) error {
+	return status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
 func (UnimplementedEPCacheServer) mustEmbedUnimplementedEPCacheServer() {}
 
@@ -70,22 +92,30 @@ func RegisterEPCacheServer(s grpc.ServiceRegistrar, srv EPCacheServer) {
 	s.RegisterService(&EPCache_ServiceDesc, srv)
 }
 
-func _EPCache_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Request)
-	if err := dec(in); err != nil {
+func _EPCache_Get_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EPCacheServer).Get(&ePCacheGetServer{stream})
+}
+
+type EPCache_GetServer interface {
+	Send(*Response) error
+	Recv() (*Request, error)
+	grpc.ServerStream
+}
+
+type ePCacheGetServer struct {
+	grpc.ServerStream
+}
+
+func (x *ePCacheGetServer) Send(m *Response) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *ePCacheGetServer) Recv() (*Request, error) {
+	m := new(Request)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(EPCacheServer).Get(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/epcachepb.EPCache/Get",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EPCacheServer).Get(ctx, req.(*Request))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 // EPCache_ServiceDesc is the grpc.ServiceDesc for EPCache service.
@@ -94,12 +124,14 @@ func _EPCache_Get_Handler(srv interface{}, ctx context.Context, dec func(interfa
 var EPCache_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "epcachepb.EPCache",
 	HandlerType: (*EPCacheServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Get",
-			Handler:    _EPCache_Get_Handler,
+			StreamName:    "Get",
+			Handler:       _EPCache_Get_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "epcachepb.proto",
 }

@@ -68,9 +68,9 @@ type Stats struct {
 // RegisterPeers specifies PeerPicker for a group, e.n. NoPeer, GrpcPool
 // or any that implements the PeerPicker.
 func (n *Node) RegisterPeers(peers PeerAgent) {
-	if n.peers != nil {
-		panic("RegisterPeers called more than once")
-	}
+	//if n.peers != nil {
+	//	panic("RegisterPeers called more than once")
+	//}
 	if peers == nil {
 		n.peers = NoPeer{}
 	} else {

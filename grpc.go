@@ -220,15 +220,17 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 
 // Implementing GrpcPool as the EPCacheServer.
 
-func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
-	gp.logger.Println("remote")
+func (gp *GrpcPool) Get(stream pb.EPCache_GetServer) error {
 	atomic.AddInt64(&gp.node.Stats.PeerReqs, 1)
-	val, err := gp.node.Get(ctx, in.GetKey())
-	if err != nil {
-		return nil, err
+	for {
+		in, _ := stream.Recv()
+		val, err := gp.node.Get(context.Background(), in.GetKey())
+		if err != nil {
+			return err
+		}
+		out := &pb.Response{Value: val.ByteSlice()}
+		stream.Send(out)
 	}
-	out := &pb.Response{Value: val.ByteSlice()}
-	return out, nil
 }
 
 // run starts a node of the EPCache cluster.
@@ -350,7 +352,7 @@ func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.protoPeers = make(map[string]*protoPeer)
 	for _, addr := range addrs {
 		if addr != gp.self {
-			gp.protoPeers[addr] = &protoPeer{addr}
+			gp.protoPeers[addr] = newProtoPeer(addr)
 		}
 	}
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
