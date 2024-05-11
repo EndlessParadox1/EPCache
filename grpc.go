@@ -221,6 +221,7 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 // Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, in *pb.Request) (*pb.Response, error) {
+	gp.logger.Println("remote")
 	atomic.AddInt64(&gp.node.Stats.PeerReqs, 1)
 	val, err := gp.node.Get(ctx, in.GetKey())
 	if err != nil {
@@ -326,6 +327,7 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	for {
 		select {
 		case <-gp.dscMsgCon.Recv():
+			gp.logger.Println("find one")
 			res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
 			if err != nil {
 				gp.logger.Fatal("failed to retrieve service list:", err)
