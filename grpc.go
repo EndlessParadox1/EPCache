@@ -3,7 +3,6 @@ package epcache
 import (
 	"context"
 	"fmt"
-	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"github.com/streadway/amqp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 const defaultReplicas = 50
@@ -32,8 +32,8 @@ type GrpcPool struct {
 	logger   *log.Logger
 	pb.UnimplementedEPCacheServer
 
-	ch       chan *pb.SyncData
-	msgQueue string
+	ch        chan *pb.SyncData
+	msgBroker string
 
 	node      *Node
 	dscMsgCon *msgctl.MsgController
@@ -54,7 +54,7 @@ var grpcPoolExist bool
 //
 //	prefix: The working directory of the EPCache cluster.
 //	registry: The listening addresses of the etcd cluster.
-func NewGrpcPool(self, prefix string, registry []string, msgQueue string, opts *GrpcPoolOptions) *GrpcPool {
+func NewGrpcPool(self, prefix string, registry []string, msgBroker string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
 	}
@@ -63,7 +63,7 @@ func NewGrpcPool(self, prefix string, registry []string, msgQueue string, opts *
 		self:      self,
 		prefix:    prefix,
 		registry:  registry,
-		msgQueue:  msgQueue,
+		msgBroker: msgBroker,
 		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		dscMsgCon: msgctl.New(2 * time.Second), // TODO
 	}
@@ -94,8 +94,9 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	gp.ch <- data
 }
 
-func (gp *GrpcPool) producer() {
-	conn, err := amqp.Dial(gp.msgQueue)
+func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	conn, err := amqp.Dial(gp.msgBroker)
 	if err != nil {
 		gp.logger.Fatal("failed to connect to MQ:", err)
 	}
@@ -118,26 +119,31 @@ func (gp *GrpcPool) producer() {
 		gp.logger.Fatal("failed to declare an exchange:", err)
 	}
 	for {
-		data := <-gp.ch
-		body, _ := proto.Marshal(data)
-		err = ch.Publish(
-			"epcache",
-			"",
-			false,
-			false,
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        body,
-			},
-		)
-		if err != nil {
-			log.Fatal("failed to publish a message:", err)
+		select {
+		case data := <-gp.ch:
+			body, _ := proto.Marshal(data)
+			err = ch.Publish(
+				"epcache",
+				"",
+				false,
+				false,
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        body,
+				},
+			)
+			if err != nil {
+				gp.logger.Print("failed to publish a message:", err)
+			}
+		case <-ctx.Done():
+			return
 		}
 	}
 } // TODO
 
-func (gp *GrpcPool) consumer() {
-	conn, err := amqp.Dial(gp.msgQueue)
+func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	conn, err := amqp.Dial(gp.msgBroker)
 	if err != nil {
 		gp.logger.Fatal("failed to connect to MQ:", err)
 	}
@@ -162,7 +168,7 @@ func (gp *GrpcPool) consumer() {
 	q, _err := ch.QueueDeclare(
 		"",
 		false,
-		false,
+		true,
 		true,
 		false,
 		nil,
@@ -192,15 +198,21 @@ func (gp *GrpcPool) consumer() {
 	if err1 != nil {
 		gp.logger.Fatal("failed to consume messages:", err1)
 	}
-	for msg := range msgs {
-		var data pb.SyncData
-		proto.Unmarshal(msg.Body, &data)
-		switch data.GetMethod() {
-		case "U":
-			go gp.node.update(data.GetKey(), data.GetValue())
-		case "R":
-			go gp.node.remove(data.GetKey())
+	for {
+		select {
+		case msg := <-msgs:
+			var data pb.SyncData
+			proto.Unmarshal(msg.Body, &data)
+			switch data.GetMethod() {
+			case "U":
+				go gp.node.update(data.GetKey(), data.GetValue())
+			case "R":
+				go gp.node.remove(data.GetKey())
+			}
+		case <-ctx.Done():
+			return
 		}
+
 	}
 } // TODO
 
@@ -256,8 +268,10 @@ func (gp *GrpcPool) run() {
 	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
-	go gp.producer() // TODO
-	go gp.consumer()
+	wg.Add(1)
+	go gp.producer(ctx, &wg) // TODO
+	wg.Add(1)
+	go gp.consumer(ctx, &wg)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
