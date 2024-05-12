@@ -2,7 +2,6 @@ package epcache
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -16,10 +15,8 @@ import (
 	"github.com/EndlessParadox1/epcache/consistenthash"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/EndlessParadox1/epcache/msgctl"
-	"github.com/streadway/amqp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 )
 
 const defaultReplicas = 50
@@ -60,12 +57,13 @@ func NewGrpcPool(self, prefix string, registry []string, msgBroker string, opts 
 	}
 	grpcPoolExist = true
 	gp := &GrpcPool{
-		self:      self,
-		prefix:    prefix,
-		registry:  registry,
-		msgBroker: msgBroker,
-		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		dscMsgCon: msgctl.New(2 * time.Second), // TODO
+		self:       self,
+		prefix:     prefix,
+		registry:   registry,
+		msgBroker:  msgBroker,
+		logger:     log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
+		dscMsgCon:  msgctl.New(2 * time.Second), // TODO
+		protoPeers: make(map[string]*protoPeer),
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -94,128 +92,6 @@ func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	gp.ch <- data
 }
 
-func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	conn, err := amqp.Dial(gp.msgBroker)
-	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ:", err)
-	}
-	defer conn.Close()
-	ch, err_ := conn.Channel()
-	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel:", err)
-	}
-	defer ch.Close()
-	err = ch.ExchangeDeclare(
-		"epcache",
-		"fanout",
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange:", err)
-	}
-	for {
-		select {
-		case data := <-gp.ch:
-			body, _ := proto.Marshal(data)
-			err = ch.Publish(
-				"epcache",
-				"",
-				false,
-				false,
-				amqp.Publishing{
-					ContentType: "text/plain",
-					Body:        body,
-				},
-			)
-			if err != nil {
-				gp.logger.Print("failed to publish a message:", err)
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
-} // TODO
-
-func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	conn, err := amqp.Dial(gp.msgBroker)
-	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ:", err)
-	}
-	defer conn.Close()
-	ch, err_ := conn.Channel()
-	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel:", err_)
-	}
-	defer ch.Close()
-	err = ch.ExchangeDeclare(
-		"epcache",
-		"fanout",
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange:", err)
-	}
-	q, _err := ch.QueueDeclare(
-		"",
-		false,
-		true,
-		true,
-		false,
-		nil,
-	)
-	if _err != nil {
-		gp.logger.Fatal("failed to declare a queue:", err)
-	}
-	err = ch.QueueBind(
-		q.Name,
-		"",
-		"epcache",
-		false,
-		nil,
-	)
-	if err != nil {
-		gp.logger.Fatalf("failed to bind queue to exchange: %v", err)
-	}
-	msgs, err1 := ch.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err1 != nil {
-		gp.logger.Fatal("failed to consume messages:", err1)
-	}
-	for {
-		select {
-		case msg := <-msgs:
-			var data pb.SyncData
-			proto.Unmarshal(msg.Body, &data)
-			switch data.GetMethod() {
-			case "U":
-				go gp.node.update(data.GetKey(), data.GetValue())
-			case "R":
-				go gp.node.remove(data.GetKey())
-			}
-		case <-ctx.Done():
-			return
-		}
-
-	}
-} // TODO
-
 func (gp *GrpcPool) SetNode(node *Node) {
 	gp.node = node
 }
@@ -234,17 +110,14 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 
 // Implementing GrpcPool as the EPCacheServer.
 
-func (gp *GrpcPool) Get(stream pb.EPCache_GetServer) error {
+func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, error) {
 	atomic.AddInt64(&gp.node.Stats.PeerReqs, 1)
-	for {
-		in, _ := stream.Recv()
-		val, err := gp.node.Get(context.Background(), in.GetKey())
-		if err != nil {
-			return err
-		}
-		out := &pb.Response{Value: val.ByteSlice()}
-		stream.Send(out)
+	val, err := gp.node.Get(ctx, req.Key)
+	if err != nil {
+		return nil, err
 	}
+	out := &pb.Response{Value: val.ByteSlice()}
+	return out, nil
 }
 
 // run starts a node of the EPCache cluster.
@@ -365,13 +238,20 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.muPeers.Lock()
 	defer gp.muPeers.Unlock()
+	old := gp.protoPeers
+	go closeAll(old)
 	gp.protoPeers = make(map[string]*protoPeer)
 	for _, addr := range addrs {
 		if addr != gp.self {
-			fmt.Println(addr)
 			gp.protoPeers[addr] = newProtoPeer(addr)
 		}
 	}
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)
 	gp.peers.Add(addrs...)
+}
+
+func closeAll(ps map[string]*protoPeer) {
+	for _, p := range ps {
+		p.Close()
+	}
 }

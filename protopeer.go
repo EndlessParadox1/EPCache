@@ -8,13 +8,28 @@ import (
 )
 
 type protoPeer struct {
-	addr string
-	ch   chan *pb.Request
-	ch2  chan *pb.Response
+	addr  string
+	inCh  chan In
+	clsCh chan struct{}
+}
+
+type In struct {
+	ctx   context.Context
+	req   *pb.Request
+	outCh chan Out
+}
+
+type Out struct {
+	res *pb.Response
+	err error
 }
 
 func newProtoPeer(addr string) *protoPeer {
-	p := &protoPeer{addr: addr, ch: make(chan *pb.Request)}
+	p := &protoPeer{
+		addr:  addr,
+		inCh:  make(chan In),
+		clsCh: make(chan struct{}),
+	}
 	go p.run()
 	return p
 }
@@ -26,16 +41,29 @@ func (p *protoPeer) run() {
 	}
 	defer conn.Close()
 	client := pb.NewEPCacheClient(conn)
-	stream, _ := client.Get(context.Background())
 	for {
-		in := <-p.ch
-		stream.Send(in)
-		ret, _ := stream.Recv()
-		p.ch2 <- ret
+		select {
+		case in := <-p.inCh:
+			go func() {
+				res, err_ := client.Get(in.ctx, in.req)
+				in.outCh <- Out{
+					res: res,
+					err: err_,
+				}
+			}()
+		case <-p.clsCh:
+			return
+		}
 	}
 }
 
-func (p *protoPeer) Get(_ context.Context, in *pb.Request) (*pb.Response, error) {
-	p.ch <- in
-	return <-p.ch2, nil
+func (p *protoPeer) Close() {
+	close(p.clsCh)
+}
+
+func (p *protoPeer) Get(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	outCh := make(chan Out)
+	p.inCh <- In{ctx: ctx, req: req, outCh: outCh}
+	out := <-outCh
+	return out.res, out.err
 }

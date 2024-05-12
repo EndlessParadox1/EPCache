@@ -209,7 +209,7 @@ func (n *Node) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (Byt
 	if err != nil {
 		return ByteView{}, err
 	}
-	value := ByteView{res.GetValue()}
+	value := ByteView{res.Value}
 	if rand.IntN(10) == 0 {
 		n.populateCache(key, value, &n.hotCache)
 	}
@@ -224,7 +224,7 @@ func (n *Node) OnUpdate(key string, value []byte) {
 		Key:    key,
 		Value:  cloneBytes(value),
 	}
-	go n.peers.SyncAll(data)
+	n.peers.SyncAll(data)
 	n.update(key, value)
 }
 
@@ -245,7 +245,7 @@ func (n *Node) OnRemove(key string) {
 		Method: "R",
 		Key:    key,
 	}
-	go n.peers.SyncAll(data)
+	n.peers.SyncAll(data)
 	n.remove(key)
 }
 

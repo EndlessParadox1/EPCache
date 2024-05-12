@@ -8,7 +8,7 @@ import (
 
 type ProtoPeer interface {
 	// Get loads data from remote using gRPC.
-	Get(ctx context.Context, in *pb.Request) (*pb.Response, error)
+	Get(ctx context.Context, req *pb.Request) (*pb.Response, error)
 }
 
 type PeerAgent interface {
