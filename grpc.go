@@ -62,7 +62,7 @@ func NewGrpcPool(self, prefix string, registry []string, msgBroker string, opts 
 		registry:   registry,
 		msgBroker:  msgBroker,
 		logger:     log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		dscMsgCon:  msgctl.New(2 * time.Second), // TODO
+		dscMsgCon:  msgctl.New(time.Second), // TODO
 		protoPeers: make(map[string]*protoPeer),
 	}
 	if opts != nil {

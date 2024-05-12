@@ -19,9 +19,13 @@
 │   └── startup.sh: provides an example to start an etcd cluster.
 ├── lru
 │   └── lru.go: implements a lru cache.
+├── msgctl
+│   └── msgctl.go:
 ├── singleflight
 │   └── singleflight.go: provides a duplicate func call suppression mechanism using Mutex and WaitGroup,
 │                          to avoid cache breakdown.
+├── amqp
+│   └── amqp.go:
 ├── byteview.go: implements an immutable view of bytes, used inside the EPCache cluster and presented to users,
 │                  which provides benefit of decoupling from data source and preventing users from 
 │                  accidentally modifying the EPCache cluster's data.
@@ -93,8 +97,8 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
 
 # Benchmark
 
-* On standalone mode: 56k qps for non-existent keys, and 143k qps for existing keys.
-
+* Max 164k qps for loading locally.
+* Max 34.8k qps for loading remotely.
 
 ## License
 
