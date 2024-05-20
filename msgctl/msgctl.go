@@ -7,6 +7,7 @@ type MsgController struct {
 	in       chan struct{}
 	out      chan struct{}
 	interval time.Duration
+	clsCh    chan struct{}
 }
 
 func New(interval time.Duration) *MsgController {
@@ -27,18 +28,25 @@ func (mc *MsgController) Recv() <-chan struct{} {
 	return mc.out
 }
 
+func (mc *MsgController) Close() {
+	close(mc.clsCh)
+}
+
 func (mc *MsgController) run() {
 	var msg []struct{}
-	ticker := time.Tick(mc.interval)
+	ticker := time.NewTicker(mc.interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-mc.in:
 			msg = append(msg, struct{}{})
-		case <-ticker:
+		case <-ticker.C:
 			if len(msg) > 0 {
 				mc.out <- struct{}{}
 				msg = nil
 			}
+		case <-mc.clsCh:
+			return
 		}
 	}
 }

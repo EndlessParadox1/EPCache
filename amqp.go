@@ -1,20 +1,24 @@
 package epcache
 
 import (
+	"context"
+	"sync"
+
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/streadway/amqp"
 	"google.golang.org/protobuf/proto"
 )
 
-func (gp *GrpcPool) producer() {
-	conn, err := amqp.Dial(gp.msgBroker)
+func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ:", err)
+		gp.logger.Fatal("failed to connect to MQ: ", err)
 	}
 	defer conn.Close()
 	ch, err_ := conn.Channel()
 	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel:", err)
+		gp.logger.Fatal("failed to open a channel: ", err)
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
@@ -27,36 +31,42 @@ func (gp *GrpcPool) producer() {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange:", err)
+		gp.logger.Fatal("failed to declare an exchange: ", err)
 	}
 	for {
-		data := <-gp.ch
-		body, _ := proto.Marshal(data)
-		err = ch.Publish(
-			gp.opts.Exchange,
-			"",
-			false,
-			false,
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        body,
-			},
-		)
-		if err != nil {
-			gp.logger.Print("failed to publish a message:", err)
+		select {
+		case data := <-gp.ch:
+			body, _ := proto.Marshal(data)
+			err = ch.Publish(
+				gp.opts.Exchange,
+				"",
+				false,
+				false,
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        body,
+				},
+			)
+			if err != nil {
+				gp.logger.Print("failed to publish a message: ", err)
+			}
+		case <-ctx.Done():
+			gp.logger.Println("Data-sync sender stopped")
+			return
 		}
 	}
 } // TODO
 
-func (gp *GrpcPool) consumer() {
-	conn, err := amqp.Dial(gp.msgBroker)
+func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ:", err)
+		gp.logger.Fatal("failed to connect to MQ: ", err)
 	}
 	defer conn.Close()
 	ch, err_ := conn.Channel()
 	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel:", err_)
+		gp.logger.Fatal("failed to open a channel: ", err_)
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
@@ -69,7 +79,7 @@ func (gp *GrpcPool) consumer() {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange:", err)
+		gp.logger.Fatal("failed to declare an exchange: ", err)
 	}
 	q, _err := ch.QueueDeclare(
 		"",
@@ -80,7 +90,7 @@ func (gp *GrpcPool) consumer() {
 		nil,
 	)
 	if _err != nil {
-		gp.logger.Fatal("failed to declare a queue:", err)
+		gp.logger.Fatal("failed to declare a queue: ", err)
 	}
 	err = ch.QueueBind(
 		q.Name,
@@ -90,7 +100,7 @@ func (gp *GrpcPool) consumer() {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatalf("failed to bind queue to exchange: %v", err)
+		gp.logger.Fatal("failed to bind queue to exchange: ", err)
 	}
 	msgs, err1 := ch.Consume(
 		q.Name,
@@ -102,17 +112,22 @@ func (gp *GrpcPool) consumer() {
 		nil,
 	)
 	if err1 != nil {
-		gp.logger.Fatal("failed to consume messages:", err1)
+		gp.logger.Fatal("failed to consume messages: ", err1)
 	}
 	for {
-		msg := <-msgs
-		var data pb.SyncData
-		proto.Unmarshal(msg.Body, &data)
-		switch data.Method {
-		case "U":
-			go gp.node.update(data.Key, data.Value)
-		case "R":
-			go gp.node.remove(data.Key)
+		select {
+		case msg := <-msgs:
+			var data pb.SyncData
+			proto.Unmarshal(msg.Body, &data)
+			switch data.Method {
+			case "U":
+				go gp.node.update(data.Key, data.Value)
+			case "R":
+				go gp.node.remove(data.Key)
+			}
+		case <-ctx.Done():
+			gp.logger.Println("Data-sync receiver stopped")
+			return
 		}
 	}
 } // TODO

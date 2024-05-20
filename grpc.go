@@ -32,8 +32,8 @@ type GrpcPool struct {
 	logger   *log.Logger
 	pb.UnimplementedEPCacheServer
 
-	ch        chan *pb.SyncData
-	msgBroker string
+	ch       chan *pb.SyncData
+	mqBroker string
 
 	node      *Node
 	dscMsgCon *msgctl.MsgController
@@ -55,7 +55,7 @@ var grpcPoolExist bool
 // NewGrpcPool returns a GrpcPool instance.
 //
 //	registry: The listening addresses of the etcd cluster.
-func NewGrpcPool(self string, registry []string, msgBroker string, opts *GrpcPoolOptions) *GrpcPool {
+func NewGrpcPool(self string, registry []string, mqBroker string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
 	}
@@ -63,7 +63,7 @@ func NewGrpcPool(self string, registry []string, msgBroker string, opts *GrpcPoo
 	gp := &GrpcPool{
 		self:       self,
 		registry:   registry,
-		msgBroker:  msgBroker,
+		mqBroker:   mqBroker,
 		logger:     log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
 		dscMsgCon:  msgctl.New(time.Second),
 		protoPeers: make(map[string]*protoPeer),
@@ -78,7 +78,7 @@ func NewGrpcPool(self string, registry []string, msgBroker string, opts *GrpcPoo
 		gp.opts.Prefix = defaultPrefix
 	}
 	if gp.opts.Exchange == "" {
-		gp.opts.Prefix = defaultExchange
+		gp.opts.Exchange = defaultExchange
 	}
 	go gp.run()
 	return gp
@@ -143,7 +143,7 @@ func (gp *GrpcPool) run() {
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		gp.logger.Fatal("connecting to etcd failed:", err)
+		gp.logger.Fatal("connecting to etcd failed: ", err)
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,8 +157,10 @@ func (gp *GrpcPool) run() {
 	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
-	go gp.producer() // TODO
-	go gp.consumer()
+	wg.Add(1)
+	go gp.producer(ctx, &wg)
+	wg.Add(1)
+	go gp.consumer(ctx, &wg)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -182,7 +184,7 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	lis, err := net.Listen("tcp", gp.self)
 	if err != nil {
-		gp.logger.Fatal("failed to listen:", err)
+		gp.logger.Fatal("failed to listen: ", err)
 	}
 	server := grpc.NewServer()
 	pb.RegisterEPCacheServer(server, gp)
@@ -191,9 +193,9 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 		server.GracefulStop()
 		gp.logger.Println("gRPC server stopped")
 	}()
-	gp.logger.Println("gRPC server listening at", lis.Addr())
+	gp.logger.Println("gRPC server listening at ", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
-		gp.logger.Fatal("failed to serve:", err_)
+		gp.logger.Fatal("failed to serve: ", err_)
 	}
 }
 
@@ -202,18 +204,17 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
 	if err != nil {
-		gp.logger.Fatal("failed to obtain lease:", err)
+		gp.logger.Fatal("failed to obtain lease: ", err)
 	}
 	leaseResCh, err_ := cli.KeepAlive(context.Background(), lease.ID)
 	if err_ != nil {
-		gp.logger.Fatal("failed to keep alive:", err)
+		gp.logger.Fatal("failed to keep alive: ", err)
 	}
 	<-ch
 	key := gp.opts.Prefix + gp.self
 	_, err = cli.Put(context.Background(), key, "", clientv3.WithLease(lease.ID))
-	gp.logger.Println("put self")
 	if err != nil {
-		gp.logger.Fatal("failed to put key:", err)
+		gp.logger.Fatal("failed to put key: ", err)
 	}
 	for {
 		select {
@@ -234,18 +235,26 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	defer wg.Done()
 	watchChan := cli.Watch(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
 	close(ch)
+	var wg_ sync.WaitGroup
+	wg_.Add(1)
 	go func() {
-		for range watchChan {
-			gp.dscMsgCon.Send()
+		defer wg_.Done()
+		for {
+			select {
+			case <-watchChan:
+				gp.dscMsgCon.Send()
+			case <-ctx.Done():
+				gp.dscMsgCon.Close()
+				return
+			}
 		}
 	}()
 	for {
 		select {
 		case <-gp.dscMsgCon.Recv():
-			gp.logger.Println("find one")
 			res, err := cli.Get(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
 			if err != nil {
-				gp.logger.Fatal("failed to retrieve service list:", err)
+				gp.logger.Fatal("failed to retrieve service list: ", err)
 			}
 			var addrs []string
 			for _, kv := range res.Kvs {
@@ -254,11 +263,12 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			gp.setPeers(addrs)
 		case <-ctx.Done():
 			closeAll(gp.protoPeers)
-			gp.logger.Println("all gRPC clients stopped")
+			wg_.Wait()
+			gp.logger.Println("All gRPC clients stopped")
 			return
 		}
 	}
-}
+} // TODO
 
 func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.muPeers.Lock()
