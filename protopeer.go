@@ -9,14 +9,14 @@ import (
 
 type protoPeer struct {
 	addr  string
-	inCh  chan In
+	inCh  chan *In
 	clsCh chan struct{}
 }
 
 type In struct {
 	ctx   context.Context
 	req   *pb.Request
-	outCh chan Out
+	outCh chan *Out
 }
 
 type Out struct {
@@ -27,7 +27,7 @@ type Out struct {
 func newProtoPeer(addr string) *protoPeer {
 	p := &protoPeer{
 		addr:  addr,
-		inCh:  make(chan In),
+		inCh:  make(chan *In),
 		clsCh: make(chan struct{}),
 	}
 	go p.run()
@@ -46,7 +46,7 @@ func (p *protoPeer) run() {
 		case in := <-p.inCh:
 			go func() {
 				res, err_ := client.Get(in.ctx, in.req)
-				in.outCh <- Out{
+				in.outCh <- &Out{
 					res: res,
 					err: err_,
 				}
@@ -62,8 +62,8 @@ func (p *protoPeer) Close() {
 }
 
 func (p *protoPeer) Get(ctx context.Context, req *pb.Request) (*pb.Response, error) {
-	outCh := make(chan Out)
-	p.inCh <- In{ctx: ctx, req: req, outCh: outCh}
+	outCh := make(chan *Out)
+	p.inCh <- &In{ctx: ctx, req: req, outCh: outCh}
 	out := <-outCh
 	return out.res, out.err
 }

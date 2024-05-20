@@ -42,5 +42,3 @@ func (mc *MsgController) run() {
 		}
 	}
 }
-
-// TODO

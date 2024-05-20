@@ -1,16 +1,12 @@
 package epcache
 
 import (
-	"context"
-	"sync"
-
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
 	"github.com/streadway/amqp"
 	"google.golang.org/protobuf/proto"
 )
 
-func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (gp *GrpcPool) producer() {
 	conn, err := amqp.Dial(gp.msgBroker)
 	if err != nil {
 		gp.logger.Fatal("failed to connect to MQ:", err)
@@ -34,30 +30,25 @@ func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
 		gp.logger.Fatal("failed to declare an exchange:", err)
 	}
 	for {
-		select {
-		case data := <-gp.ch:
-			body, _ := proto.Marshal(data)
-			err = ch.Publish(
-				"epcache",
-				"",
-				false,
-				false,
-				amqp.Publishing{
-					ContentType: "text/plain",
-					Body:        body,
-				},
-			)
-			if err != nil {
-				gp.logger.Print("failed to publish a message:", err)
-			}
-		case <-ctx.Done():
-			return
+		data := <-gp.ch
+		body, _ := proto.Marshal(data)
+		err = ch.Publish(
+			"epcache",
+			"",
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Body:        body,
+			},
+		)
+		if err != nil {
+			gp.logger.Print("failed to publish a message:", err)
 		}
 	}
 } // TODO
 
-func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (gp *GrpcPool) consumer() {
 	conn, err := amqp.Dial(gp.msgBroker)
 	if err != nil {
 		gp.logger.Fatal("failed to connect to MQ:", err)
@@ -114,19 +105,14 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 		gp.logger.Fatal("failed to consume messages:", err1)
 	}
 	for {
-		select {
-		case msg := <-msgs:
-			var data pb.SyncData
-			proto.Unmarshal(msg.Body, &data)
-			switch data.Method {
-			case "U":
-				go gp.node.update(data.Key, data.Value)
-			case "R":
-				go gp.node.remove(data.Key)
-			}
-		case <-ctx.Done():
-			return
+		msg := <-msgs
+		var data pb.SyncData
+		proto.Unmarshal(msg.Body, &data)
+		switch data.Method {
+		case "U":
+			go gp.node.update(data.Key, data.Value)
+		case "R":
+			go gp.node.remove(data.Key)
 		}
-
 	}
 } // TODO

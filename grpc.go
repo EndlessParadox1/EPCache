@@ -108,6 +108,12 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 	return
 }
 
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(pb.Response)
+	},
+}
+
 // Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, error) {
@@ -116,8 +122,9 @@ func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, err
 	if err != nil {
 		return nil, err
 	}
-	out := &pb.Response{Value: val.ByteSlice()}
-	return out, nil
+	b := bufferPool.Get().(*pb.Response)
+	b.Value = val.ByteSlice()
+	return b, nil
 }
 
 // run starts a node of the EPCache cluster.
@@ -137,19 +144,26 @@ func (gp *GrpcPool) run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go gp.register(ctx, &wg, cli, ch)
-	wg.Add(1)
-	go gp.discover(ctx, &wg, cli, ch)
+	go gp.discover(cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
-	wg.Add(1)
-	go gp.producer(ctx, &wg) // TODO
-	wg.Add(1)
-	go gp.consumer(ctx, &wg)
+	go gp.producer() // TODO
+	go gp.consumer()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
-	gp.logger.Println("Shutting down gracefully...")
-	cancel()  // notifying all goroutines to stop
+	go func() {
+		count := 0
+		for {
+			<-sigChan
+			count++
+			if count == 1 {
+				gp.logger.Println("Shutting down gracefully...SIG again to force")
+				cancel() // notifying some goroutines to clean up
+			} else {
+				os.Exit(1)
+			}
+		}
+	}()
 	wg.Wait() // waiting for all cleaning works to be completed
 }
 
@@ -167,7 +181,7 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 		server.GracefulStop()
 		gp.logger.Println("gRPC server stopped")
 	}()
-	gp.logger.Println("GrpcPool listening at", lis.Addr())
+	gp.logger.Println("gRPC server listening at", lis.Addr())
 	if err_ := server.Serve(lis); err_ != nil {
 		gp.logger.Fatal("failed to serve:", err_)
 	}
@@ -199,15 +213,14 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			}
 		case <-ctx.Done():
 			cli.Revoke(context.Background(), lease.ID)
-			gp.logger.Println("Service register stopped")
+			gp.logger.Println("Unregistered immediately from the registry (might failed)")
 			return
 		}
 	}
 }
 
 // discover will find out all peers and the groups they owned from etcd when changes happen.
-func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
-	defer wg.Done()
+func (gp *GrpcPool) discover(cli *clientv3.Client, ch chan struct{}) {
 	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
 	close(ch)
 	go func() {
@@ -216,22 +229,17 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 		}
 	}()
 	for {
-		select {
-		case <-gp.dscMsgCon.Recv():
-			gp.logger.Println("find one")
-			res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
-			if err != nil {
-				gp.logger.Fatal("failed to retrieve service list:", err)
-			}
-			var addrs []string
-			for _, kv := range res.Kvs {
-				addrs = append(addrs, strings.TrimPrefix(string(kv.Key), gp.prefix))
-			}
-			gp.setPeers(addrs)
-		case <-ctx.Done():
-			gp.logger.Println("Service discovery stopped")
-			return
+		<-gp.dscMsgCon.Recv()
+		gp.logger.Println("find one")
+		res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
+		if err != nil {
+			gp.logger.Fatal("failed to retrieve service list:", err)
 		}
+		var addrs []string
+		for _, kv := range res.Kvs {
+			addrs = append(addrs, strings.TrimPrefix(string(kv.Key), gp.prefix))
+		}
+		gp.setPeers(addrs)
 	}
 }
 
