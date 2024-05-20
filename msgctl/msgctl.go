@@ -15,6 +15,7 @@ func New(interval time.Duration) *MsgController {
 		in:       make(chan struct{}),
 		out:      make(chan struct{}),
 		interval: interval,
+		clsCh:    make(chan struct{}),
 	}
 	go mc.run()
 	return mc

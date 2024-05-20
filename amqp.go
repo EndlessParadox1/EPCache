@@ -13,12 +13,12 @@ func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ: ", err)
+		gp.logger.Fatal("failed to connect to MQ:", err)
 	}
 	defer conn.Close()
 	ch, err_ := conn.Channel()
 	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel: ", err)
+		gp.logger.Fatal("failed to open a channel:", err)
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
@@ -31,7 +31,7 @@ func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange: ", err)
+		gp.logger.Fatal("failed to declare an exchange:", err)
 	}
 	for {
 		select {
@@ -48,7 +48,7 @@ func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
 				},
 			)
 			if err != nil {
-				gp.logger.Print("failed to publish a message: ", err)
+				gp.logger.Print("failed to publish a message:", err)
 			}
 		case <-ctx.Done():
 			gp.logger.Println("Data-sync sender stopped")
@@ -61,12 +61,12 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {
-		gp.logger.Fatal("failed to connect to MQ: ", err)
+		gp.logger.Fatal("failed to connect to MQ:", err)
 	}
 	defer conn.Close()
 	ch, err_ := conn.Channel()
 	if err_ != nil {
-		gp.logger.Fatal("failed to open a channel: ", err_)
+		gp.logger.Fatal("failed to open a channel:", err_)
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
@@ -79,7 +79,7 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatal("failed to declare an exchange: ", err)
+		gp.logger.Fatal("failed to declare an exchange:", err)
 	}
 	q, _err := ch.QueueDeclare(
 		"",
@@ -90,7 +90,7 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 		nil,
 	)
 	if _err != nil {
-		gp.logger.Fatal("failed to declare a queue: ", err)
+		gp.logger.Fatal("failed to declare a queue:", err)
 	}
 	err = ch.QueueBind(
 		q.Name,
@@ -100,7 +100,7 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 		nil,
 	)
 	if err != nil {
-		gp.logger.Fatal("failed to bind queue to exchange: ", err)
+		gp.logger.Fatal("failed to bind queue to exchange:", err)
 	}
 	msgs, err1 := ch.Consume(
 		q.Name,
@@ -112,7 +112,7 @@ func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
 		nil,
 	)
 	if err1 != nil {
-		gp.logger.Fatal("failed to consume messages: ", err1)
+		gp.logger.Fatal("failed to consume messages:", err1)
 	}
 	for {
 		select {
