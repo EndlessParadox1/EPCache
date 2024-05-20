@@ -18,7 +18,7 @@ func (gp *GrpcPool) producer() {
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
-		"epcache",
+		gp.opts.Exchange,
 		"fanout",
 		false,
 		false,
@@ -33,7 +33,7 @@ func (gp *GrpcPool) producer() {
 		data := <-gp.ch
 		body, _ := proto.Marshal(data)
 		err = ch.Publish(
-			"epcache",
+			gp.opts.Exchange,
 			"",
 			false,
 			false,
@@ -60,7 +60,7 @@ func (gp *GrpcPool) consumer() {
 	}
 	defer ch.Close()
 	err = ch.ExchangeDeclare(
-		"epcache",
+		gp.opts.Exchange,
 		"fanout",
 		false,
 		false,
@@ -85,7 +85,7 @@ func (gp *GrpcPool) consumer() {
 	err = ch.QueueBind(
 		q.Name,
 		"",
-		"epcache",
+		gp.opts.Exchange,
 		false,
 		nil,
 	)

@@ -21,9 +21,12 @@ import (
 
 const defaultReplicas = 50
 
+const defaultPrefix = "epcache/"
+
+const defaultExchange = "epcache"
+
 type GrpcPool struct {
 	self     string
-	prefix   string
 	registry []string
 	opts     GrpcPoolOptions
 	logger   *log.Logger
@@ -41,6 +44,8 @@ type GrpcPool struct {
 }
 
 type GrpcPoolOptions struct {
+	Prefix   string
+	Exchange string
 	Replicas int
 	HashFn   consistenthash.Hash
 }
@@ -49,16 +54,14 @@ var grpcPoolExist bool
 
 // NewGrpcPool returns a GrpcPool instance.
 //
-//	prefix: The working directory of the EPCache cluster.
 //	registry: The listening addresses of the etcd cluster.
-func NewGrpcPool(self, prefix string, registry []string, msgBroker string, opts *GrpcPoolOptions) *GrpcPool {
+func NewGrpcPool(self string, registry []string, msgBroker string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
 	}
 	grpcPoolExist = true
 	gp := &GrpcPool{
 		self:       self,
-		prefix:     prefix,
 		registry:   registry,
 		msgBroker:  msgBroker,
 		logger:     log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
@@ -70,6 +73,12 @@ func NewGrpcPool(self, prefix string, registry []string, msgBroker string, opts 
 	}
 	if gp.opts.Replicas == 0 {
 		gp.opts.Replicas = defaultReplicas
+	}
+	if gp.opts.Prefix == "" {
+		gp.opts.Prefix = defaultPrefix
+	}
+	if gp.opts.Exchange == "" {
+		gp.opts.Prefix = defaultExchange
 	}
 	go gp.run()
 	return gp
@@ -144,7 +153,8 @@ func (gp *GrpcPool) run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go gp.register(ctx, &wg, cli, ch)
-	go gp.discover(cli, ch)
+	wg.Add(1)
+	go gp.discover(ctx, &wg, cli, ch)
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
 	go gp.producer() // TODO
@@ -199,7 +209,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 		gp.logger.Fatal("failed to keep alive:", err)
 	}
 	<-ch
-	key := gp.prefix + gp.self
+	key := gp.opts.Prefix + gp.self
 	_, err = cli.Put(context.Background(), key, "", clientv3.WithLease(lease.ID))
 	gp.logger.Println("put self")
 	if err != nil {
@@ -220,8 +230,9 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 }
 
 // discover will find out all peers and the groups they owned from etcd when changes happen.
-func (gp *GrpcPool) discover(cli *clientv3.Client, ch chan struct{}) {
-	watchChan := cli.Watch(context.Background(), gp.prefix, clientv3.WithPrefix())
+func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
+	defer wg.Done()
+	watchChan := cli.Watch(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
 	close(ch)
 	go func() {
 		for range watchChan {
@@ -229,17 +240,23 @@ func (gp *GrpcPool) discover(cli *clientv3.Client, ch chan struct{}) {
 		}
 	}()
 	for {
-		<-gp.dscMsgCon.Recv()
-		gp.logger.Println("find one")
-		res, err := cli.Get(context.Background(), gp.prefix, clientv3.WithPrefix())
-		if err != nil {
-			gp.logger.Fatal("failed to retrieve service list:", err)
+		select {
+		case <-gp.dscMsgCon.Recv():
+			gp.logger.Println("find one")
+			res, err := cli.Get(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
+			if err != nil {
+				gp.logger.Fatal("failed to retrieve service list:", err)
+			}
+			var addrs []string
+			for _, kv := range res.Kvs {
+				addrs = append(addrs, strings.TrimPrefix(string(kv.Key), gp.opts.Prefix))
+			}
+			gp.setPeers(addrs)
+		case <-ctx.Done():
+			closeAll(gp.protoPeers)
+			gp.logger.Println("all gRPC clients stopped")
+			return
 		}
-		var addrs []string
-		for _, kv := range res.Kvs {
-			addrs = append(addrs, strings.TrimPrefix(string(kv.Key), gp.prefix))
-		}
-		gp.setPeers(addrs)
 	}
 }
 
