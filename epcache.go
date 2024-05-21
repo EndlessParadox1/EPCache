@@ -26,7 +26,7 @@ func NewNode(cacheBytes int64, getter Getter) *Node {
 	return g
 }
 
-// Node is a set of associated data spreading over one or more processes.
+// Node is TODO
 type Node struct {
 	peers      PeerAgent
 	loader     *singleflight.Group
@@ -49,7 +49,7 @@ type Node struct {
 	Stats Stats
 }
 
-// Stats are statistics for group.
+// Stats are statistics for a node.
 type Stats struct {
 	Reqs          int64
 	Gets          int64
@@ -65,7 +65,7 @@ type Stats struct {
 	LenBlacklist int64
 }
 
-// RegisterPeers specifies PeerPicker for a group, e.n. NoPeer, GrpcPool
+// RegisterPeers specifies PeerPicker for a node, e.g. NoPeer, GrpcPool
 // or any that implements the PeerPicker.
 func (n *Node) RegisterPeers(peers PeerAgent) {
 	//if n.peers != nil {
@@ -217,7 +217,7 @@ func (n *Node) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (Byt
 }
 
 // OnUpdate updates data in cache and then syncs to all peers in background.
-// This must be called when data in source is changed.
+// This must be called when data in source is changed. TODO
 func (n *Node) OnUpdate(key string, value []byte) {
 	data := &pb.SyncData{
 		Method: "U",
@@ -238,8 +238,8 @@ func (n *Node) update(key string, value []byte) {
 	}
 }
 
-// OnRemove removes data in cache and then syncs to all peers in background.
-// This must be called when data in source is purged.
+// OnRemove removes data in cache and then syncs to all peers using MQ.
+// This must be called when data in source is purged. TODO
 func (n *Node) OnRemove(key string) {
 	data := &pb.SyncData{
 		Method: "R",
@@ -276,7 +276,7 @@ func (n *Node) populateCache(key string, value ByteView, cache *cache) {
 		if mainBytes+hotBytes <= n.cacheBytes {
 			break
 		}
-		// A magical strategy proven to be effective
+		// A magical strategy proven to be effective.
 		victim := &n.mainCache
 		if hotBytes > mainBytes/8 {
 			victim = &n.hotCache

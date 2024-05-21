@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
+func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {
@@ -57,7 +57,7 @@ func (gp *GrpcPool) producer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 } // TODO
 
-func (gp *GrpcPool) consumer(ctx context.Context, wg *sync.WaitGroup) {
+func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
 	if err != nil {

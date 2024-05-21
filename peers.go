@@ -12,7 +12,7 @@ type ProtoPeer interface {
 }
 
 type PeerAgent interface {
-	// PickPeer picks peer with the same group according to the key.
+	// PickPeer picks peer according to the key.
 	PickPeer(key string) (ProtoPeer, bool)
 	// SyncAll trys to sync data to all peers.
 	SyncAll(data *pb.SyncData)
@@ -21,7 +21,7 @@ type PeerAgent interface {
 	ListPeers() []string
 }
 
-// NoPeer is an implementation of PeerAgent, used for groups running in standalone mode.
+// NoPeer is an implementation of PeerAgent, used for nodes running in standalone mode.
 type NoPeer struct{}
 
 func (NoPeer) PickPeer(_ string) (peer ProtoPeer, ok bool) {

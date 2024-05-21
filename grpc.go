@@ -151,9 +151,9 @@ func (gp *GrpcPool) run() {
 	wg.Add(1)
 	go gp.startServer(ctx, &wg)
 	wg.Add(1)
-	go gp.producer(ctx, &wg)
+	go gp.produce(ctx, &wg)
 	wg.Add(1)
-	go gp.consumer(ctx, &wg)
+	go gp.consume(ctx, &wg)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -223,7 +223,7 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-// discover will find out all peers and the groups they owned from etcd when changes happen.
+// discover will find out all peers from etcd when changes happen.
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
 	watchChan := cli.Watch(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
@@ -268,6 +268,6 @@ func (gp *GrpcPool) setPeers(addrs []string) {
 
 func closeAll(ps map[string]*protoPeer) {
 	for _, p := range ps {
-		p.Close()
+		p.close()
 	}
 }

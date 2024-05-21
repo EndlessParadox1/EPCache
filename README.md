@@ -25,7 +25,7 @@
 │   └── singleflight.go: provides a duplicate func call suppression mechanism using Mutex and WaitGroup,
 │                          to avoid cache breakdown.
 ├── amqp
-│   └── amqp.go: handles data synchronization across nodes based on the fanout pattern of an AMQP instance.
+│   └── amqp.go: handles data synchronization across nodes based on the fanout pattern of an MQ instance.
 ├── byteview.go: implements an immutable view of bytes, used inside the EPCache cluster and presented to users,
 │                  which provides benefit of decoupling from data source and preventing users from 
 │                  accidentally modifying the EPCache cluster's data.
@@ -36,12 +36,11 @@
 ├── getter.go: provides the interface Getter, which must be implemented by users to access to the data source.
 ├── grpc.go: implements GrpcPool as a PeerAgent, which communicates with other nodes using gRPC, 
 │              it will deal with the service registration and discovery based on etcd,
-│              the data synchronization sending and receiving based on AMQP,
+│              the data synchronization sending and receiving based on MQ,
 │              and of course start a gRPC server, all of which support graceful shutdown. 
 ├── peers.go: provides the interface standards of ProtoPeer and PeerAgent, which are responsible for
 │               the interation work among the EPCache cluster nodes; also implements NoPeer as a PeerAgent.
-└── protopeer.go: implements protoPeer as a ProtoPeer with several long-running gRPC clients,
-                    which will be used by GrpcPool.
+└── protopeer.go: implements protoPeer as a ProtoPeer with a long-running gRPC client, which will be used by GrpcPool.
 ```
 
 ## Procedure
@@ -73,6 +72,8 @@ OnUpdate/OnDelete -----> opt locally if exist
                                                                           |----> log all
 ```
 
+[//]: # (TODO)
+
 ## Highlights
 
 1. Using gRPC/ProtoBuf to achieve efficient communication between nodes: request forwarding and data synchronization.
@@ -82,15 +83,20 @@ OnUpdate/OnDelete -----> opt locally if exist
 5. Implementing service registration and service discovery based on etcd to achieve synchronization 
    when nodes and their groups are dynamically adjusted.
 
+[//]: # (TODO)
+
 ## Guide
 
 1. You can build up a cache system as you like by importing this module.
 2. Getter is implemented by you, a normal one might be using DB as data source.
-3. ProtoPeer and PeerAgent can also be implemented by you, and using protoPeer and GrpcPool is recommended
-   when attempting to build up a cluster, as well as NoPeer when you just need standalone one.
-4. Set up ratelimiter and bloomfilter when you need them.
-5. The GrpcPool will log something important when up.
-6. An API server is the best practise to be built in front of an EPCache cluster node.
+3. ProtoPeer and PeerAgent can also be implemented by you, and using protoPeer and GrpcPool are recommended
+   if you attempt to build up a cluster, while NoPeer if you just need standalone one.
+4. GrpcPool requires both a running etcd cluster instance and a running AMQP-based MQ instance. 
+5. Set up ratelimiter and bloomfilter when you need them.
+6. The GrpcPool will log something important when up.
+7. An API server is the best practise to be built in front of an EPCache cluster node.
+
+[//]: # (TODO)
 
 ## Contributing
 
@@ -98,7 +104,7 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
 
 # Benchmark
 
-* For 100k data entries, up to 3030k qps on average if cache hit locally and 33k qps if cache hit remotely 
+* For 100k data entries, up to 3030k qps if cache hit locally and 33k qps if cache hit remotely 
   when used concurrently.
 * For 100k data entries, as short as 633 ms to complete the writing regardless of the time spent on 
   retrieving them from data source.
