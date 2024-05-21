@@ -117,12 +117,6 @@ func (gp *GrpcPool) ListPeers() (ans []string) {
 	return
 }
 
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return new(pb.Response)
-	},
-}
-
 // Implementing GrpcPool as the EPCacheServer.
 
 func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, error) {
@@ -131,9 +125,8 @@ func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, err
 	if err != nil {
 		return nil, err
 	}
-	b := bufferPool.Get().(*pb.Response)
-	b.Value = val.ByteSlice()
-	return b, nil
+	out := &pb.Response{Value: val.ByteSlice()}
+	return out, nil
 }
 
 // run starts a node of the EPCache cluster.
@@ -266,7 +259,7 @@ func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.protoPeers = make(map[string]*protoPeer)
 	for _, addr := range addrs {
 		if addr != gp.self {
-			gp.protoPeers[addr] = newProtoPeer(addr)
+			gp.protoPeers[addr] = newProtoPeer(addr, gp.logger)
 		}
 	}
 	gp.peers = consistenthash.New(gp.opts.Replicas, gp.opts.HashFn)

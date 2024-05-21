@@ -20,27 +20,28 @@
 ├── lru
 │   └── lru.go: implements a lru cache.
 ├── msgctl
-│   └── msgctl.go:
+│   └── msgctl.go: provides a tool for merging messages within a specified interval.
 ├── singleflight
 │   └── singleflight.go: provides a duplicate func call suppression mechanism using Mutex and WaitGroup,
 │                          to avoid cache breakdown.
 ├── amqp
-│   └── amqp.go:
+│   └── amqp.go: handles data synchronization across nodes based on the fanout pattern of an AMQP instance.
 ├── byteview.go: implements an immutable view of bytes, used inside the EPCache cluster and presented to users,
 │                  which provides benefit of decoupling from data source and preventing users from 
 │                  accidentally modifying the EPCache cluster's data.
 ├── cache.go: wraps a lru cache and its operators, using Mutex to provide concurrent safety 
 │               and recording relevant statistical data. 
-├── epcache.go: group, the orgainizational form of data, provides APIs to an EPCache cluster node, 
-│                 like Get, OnUpdate and OnDelete etc. The ratelimiter and bloomfilter here can be enable and
-│                 disabled at any time.
+├── epcache.go: provides APIs to an EPCache cluster node, like Get, OnUpdate and OnDelete etc. 
+│                 The ratelimiter and bloomfilter here can be enable and disabled at any time.
 ├── getter.go: provides the interface Getter, which must be implemented by users to access to the data source.
 ├── grpc.go: implements GrpcPool as a PeerAgent, which communicates with other nodes using gRPC, 
-│              it will automatically deal with the service registration and discovery work based on etcd,
-│              and of course satrt a gRPC server, all of which support graceful shutdown.
+│              it will deal with the service registration and discovery based on etcd,
+│              the data synchronization sending and receiving based on AMQP,
+│              and of course start a gRPC server, all of which support graceful shutdown. 
 ├── peers.go: provides the interface standards of ProtoPeer and PeerAgent, which are responsible for
 │               the interation work among the EPCache cluster nodes; also implements NoPeer as a PeerAgent.
-└── protopeer.go: implements protoPeer as a ProtoPeer with a gRPC client, which is used by GrpcPool.
+└── protopeer.go: implements protoPeer as a ProtoPeer with several long-running gRPC clients,
+                    which will be used by GrpcPool.
 ```
 
 ## Procedure
@@ -97,8 +98,10 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
 
 # Benchmark
 
-* Max 164k qps for loading locally.
-* Max 34.8k qps for loading remotely.
+* For 100k data entries, up to 3030k qps on average if cache hit locally and 33k qps if cache hit remotely 
+  when used concurrently.
+* For 100k data entries, as short as 633 ms to complete the writing regardless of the time spent on 
+  retrieving them from data source.
 
 ## License
 
