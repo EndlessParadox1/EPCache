@@ -1,4 +1,4 @@
-// Package epcache implements a distributed cache system.
+// Package epcache implements a distributed cache system development framework.
 package epcache
 
 import (
@@ -216,8 +216,8 @@ func (n *Node) getFromPeer(ctx context.Context, peer ProtoPeer, key string) (Byt
 	return value, nil
 }
 
-// OnUpdate updates data in cache and then syncs to all peers in background.
-// This must be called when data in source is changed. TODO
+// OnUpdate updates data in cache and then syncs to all peers using MQ.
+// This must be called when data in source is changed to ensure consistency.
 func (n *Node) OnUpdate(key string, value []byte) {
 	data := &pb.SyncData{
 		Method: "U",
@@ -239,7 +239,7 @@ func (n *Node) update(key string, value []byte) {
 }
 
 // OnRemove removes data in cache and then syncs to all peers using MQ.
-// This must be called when data in source is purged. TODO
+// This must be called when data in source is purged to ensure consistency.
 func (n *Node) OnRemove(key string) {
 	data := &pb.SyncData{
 		Method: "R",

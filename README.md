@@ -1,8 +1,9 @@
 # EPCache
 
-> EPCache is Endless Paradox's cache, Experiment-Purpose cache and Enhanced-Performance cache. 
-> A lightweight and highly customizable distributed cache system construction package implemented by golang. 
-> Data synchronization between nodes is asynchronous, with high concurrent access capabilities and ease of use.
+> EPCache is Endless Paradox's Cache, Experiment-Purpose Cache and Enhanced-Performance Cache. 
+  A lightweight and customizable distributed cache system developing framework implemented by golang. 
+  Suitable for scenarios with more reads and less writes, has high concurrent access capabilities, 
+  and ensures eventual consistency.
 
 ## Structure
 ```
@@ -59,31 +60,17 @@ Get -----> cache hit? -----> retrun
                             |-----------------------------------------> load locally -----> exist? -----> popuate main cache -----> return
                                                                                              | n                                  
                                                                                              |----> return error
-OnUpdate/OnDelete -----> opt locally if exist
-                          | go                                  
-                          |----> sync to peers 
-                                  | go all
-                                  |                                      y             
-                                  |----> sync to one peer -----> suc? -----> opt remotely if exist
-                                                                  | n                                  
-                                                                  |----> collet 
-                                                                          | then
-                                                                          |
-                                                                          |----> log all
 ```
-
-[//]: # (TODO)
 
 ## Highlights
 
 1. Using gRPC/ProtoBuf to achieve efficient communication between nodes: request forwarding and data synchronization.
 2. Implementing cache elimination strategy based on LRU, and implement load balancing based on consistent hashing.
-3. Using mutexes and semaphores to prevent cache penetration, and providing bloom filters to prevent cache penetration.
-4. Providing the token bucket algorithm to limit the request flow of the cache system.
-5. Implementing service registration and service discovery based on etcd to achieve synchronization 
-   when nodes and their groups are dynamically adjusted.
-
-[//]: # (TODO)
+3. Use mutex and semaphore to prevent cache breakdown, Bloom filters to prevent cache penetration, 
+   and token bucket algorithm to implement request-flow limiting.
+4. Asynchronous data synchronization across nodes based on AMQP-style message queue
+   has the advantages of order guarantee and decoupling.
+5. Implementing service registration and discovery based on etcd cluster to achieve dynamic adjustment of nodes.
 
 ## Guide
 
@@ -91,12 +78,10 @@ OnUpdate/OnDelete -----> opt locally if exist
 2. Getter is implemented by you, a normal one might be using DB as data source.
 3. ProtoPeer and PeerAgent can also be implemented by you, and using protoPeer and GrpcPool are recommended
    if you attempt to build up a cluster, while NoPeer if you just need standalone one.
-4. GrpcPool requires both a running etcd cluster instance and a running AMQP-based MQ instance. 
+4. GrpcPool requires both a running etcd cluster instance and a running AMQP-style MQ instance. 
 5. Set up ratelimiter and bloomfilter when you need them.
 6. The GrpcPool will log something important when up.
 7. An API server is the best practise to be built in front of an EPCache cluster node.
-
-[//]: # (TODO)
 
 ## Contributing
 
@@ -107,7 +92,7 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
 * For 100k data entries, up to 3030k qps if cache hit locally and 33k qps if cache hit remotely 
   when used concurrently.
 * For 100k data entries, as short as 633 ms to complete the writing regardless of the time spent on 
-  retrieving them from data source.
+  retrieving them from source.
 
 ## License
 

@@ -43,6 +43,10 @@ type GrpcPool struct {
 	protoPeers map[string]*protoPeer // keys like "localhost:8080"
 }
 
+// GrpcPoolOptions are options to build a GrpcPool instance.
+//
+//	Prefix: The etcd namespace to which an EPCache cluster instance belongs.
+//	Exchange: The MQ exchange used by an EPCache cluster instance.
 type GrpcPoolOptions struct {
 	Prefix   string
 	Exchange string
@@ -54,7 +58,8 @@ var grpcPoolExist bool
 
 // NewGrpcPool returns a GrpcPool instance.
 //
-//	registry: The listening addresses of the etcd cluster.
+//		registry: The listening addresses of the etcd cluster.
+//	 mqBroker: The listening address of the MQ broker.
 func NewGrpcPool(self string, registry []string, mqBroker string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
@@ -96,7 +101,7 @@ func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 	return nil, false
 }
 
-// SyncAll trys to sync data to all peers in an async way, and logs error if any.
+// SyncAll just publishes a message to the MQ exchange working in fanout pattern.
 func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
 	gp.ch <- data
 }
@@ -125,11 +130,12 @@ func (gp *GrpcPool) Get(ctx context.Context, req *pb.Request) (*pb.Response, err
 	if err != nil {
 		return nil, err
 	}
-	out := &pb.Response{Value: val.ByteSlice()}
-	return out, nil
+	out_ := &pb.Response{Value: val.ByteSlice()}
+	return out_, nil
 }
 
-// run starts a node of the EPCache cluster.
+// run starts the service registration and discovery, the data sync sending and receiving, as well as the gRPC server.
+// all of which support graceful shutdown.
 func (gp *GrpcPool) run() {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   gp.registry,
@@ -140,8 +146,7 @@ func (gp *GrpcPool) run() {
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	// This ensures that the first service registration from self
-	// can be caught by service discovery's watch.
+	// This ensures that the service registration from self can be caught by the service discovery's watch.
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -192,7 +197,7 @@ func (gp *GrpcPool) startServer(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// register will update groups owned to the etcd every 30 minutes.
+// register keeps alive the registration in etcd and revokes it when shutdown gracefully.
 func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
 	lease, err := cli.Grant(context.Background(), 60)
@@ -223,7 +228,8 @@ func (gp *GrpcPool) register(ctx context.Context, wg *sync.WaitGroup, cli *clien
 	}
 }
 
-// discover will find out all peers from etcd when changes happen.
+// discover finds out all peers from etcd if changes happen, then rebuilds the hash ring ans protoPeers with them.
+// All running gRPC clients will be stopped when shutdown gracefully.
 func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clientv3.Client, ch chan struct{}) {
 	defer wg.Done()
 	watchChan := cli.Watch(context.Background(), gp.opts.Prefix, clientv3.WithPrefix())
@@ -249,13 +255,13 @@ func (gp *GrpcPool) discover(ctx context.Context, wg *sync.WaitGroup, cli *clien
 			return
 		}
 	}
-} // TODO
+}
 
 func (gp *GrpcPool) setPeers(addrs []string) {
 	gp.muPeers.Lock()
 	defer gp.muPeers.Unlock()
 	old := gp.protoPeers
-	go closeAll(old)
+	closeAll(old)
 	gp.protoPeers = make(map[string]*protoPeer)
 	for _, addr := range addrs {
 		if addr != gp.self {

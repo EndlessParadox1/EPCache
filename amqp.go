@@ -51,7 +51,7 @@ func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 				gp.logger.Print("failed to publish a message:", err)
 			}
 		case <-ctx.Done():
-			gp.logger.Println("Data-sync sender stopped")
+			gp.logger.Println("Data sync sender stopped")
 			return
 		}
 	}
@@ -126,7 +126,7 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 				go gp.node.remove(data.Key)
 			}
 		case <-ctx.Done():
-			gp.logger.Println("Data-sync receiver stopped")
+			gp.logger.Println("Data sync receiver stopped")
 			return
 		}
 	}

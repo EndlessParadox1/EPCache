@@ -36,8 +36,8 @@ func newProtoPeer(addr string, logger *log.Logger) *protoPeer {
 	return p
 }
 
-// run starts a long-running gRPC client for every cluster node,
-// which avoids performance loss caused by repeatedly establishing TCP connections. TODO
+// run starts a long-running gRPC client for a remote node,
+// which avoids performance loss caused by repeatedly establishing TCP connections.
 func (p *protoPeer) run(logger *log.Logger) {
 	conn, err := grpc.NewClient(p.addr, grpc.WithTransportCredentials(insecure.NewCredentials())) // disable TLS
 	if err != nil {
