@@ -61,6 +61,7 @@ type Stats struct {
 	PeerLoads     int64
 	PeerLoadErrs  int64
 	PeerReqs      int64 // requests from peers
+	PeerSyncs     int64 // data-syncs from peers
 
 	LenBlacklist int64
 }

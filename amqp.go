@@ -3,9 +3,10 @@ package epcache
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -44,6 +45,7 @@ func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 				false,
 				amqp.Publishing{
 					ContentType: "text/plain",
+					AppId:       gp.self,
 					Body:        body,
 				},
 			)
@@ -117,14 +119,17 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case msg := <-msgs:
-			var data pb.SyncData
-			proto.Unmarshal(msg.Body, &data)
-			switch data.Method {
-			case "U":
-				go gp.node.update(data.Key, data.Value)
-			case "R":
-				go gp.node.remove(data.Key)
-			}
+			if msg.AppId != gp.self {
+				atomic.AddInt64(&gp.node.Stats.PeerSyncs, 1)
+				var data pb.SyncData
+				proto.Unmarshal(msg.Body, &data)
+				switch data.Method {
+				case "U":
+					gp.node.update(data.Key, data.Value)
+				case "R":
+					gp.node.remove(data.Key)
+				}
+			} // to ignore messages from self
 		case <-ctx.Done():
 			gp.logger.Println("Data sync receiver stopped")
 			return

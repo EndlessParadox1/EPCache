@@ -17,6 +17,10 @@ func (bv ByteView) ByteSlice() []byte {
 	return cloneBytes(bv.b)
 }
 
+func (bv ByteView) String() string {
+	return string(cloneBytes(bv.b))
+}
+
 // Slice slices the view between from and to.
 func (bv ByteView) Slice(from, to int) ByteView {
 	return ByteView{bv.b[from:to]}
