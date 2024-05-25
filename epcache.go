@@ -10,8 +10,8 @@ import (
 
 	"github.com/EndlessParadox1/epcache/bloomfilter"
 	pb "github.com/EndlessParadox1/epcache/epcachepb"
+	"github.com/EndlessParadox1/epcache/ratelimit"
 	"github.com/EndlessParadox1/epcache/singleflight"
-	"github.com/juju/ratelimit"
 )
 
 func NewNode(cacheBytes int64, getter Getter) *Node {
@@ -41,7 +41,7 @@ type Node struct {
 
 	muLimiter sync.RWMutex
 	limitMode LimitMode
-	limiter   *ratelimit.Bucket
+	limiter   *ratelimit.TokenBucket
 
 	muFilter sync.RWMutex
 	filter   *bloomfilter.BloomFilter
@@ -89,11 +89,11 @@ const (
 )
 
 // SetLimiter sets a rate limiter working on blocking or rejecting mode.
-func (n *Node) SetLimiter(rate float64, cap int64, mode LimitMode) {
+func (n *Node) SetLimiter(rate int, cap int, mode LimitMode) {
 	n.muLimiter.Lock()
 	defer n.muLimiter.Unlock()
 	n.limitMode = mode
-	n.limiter = ratelimit.NewBucketWithRate(rate, cap)
+	n.limiter = ratelimit.New(rate, cap)
 }
 
 // ResetLimiter disables a rate limiter.
@@ -127,9 +127,12 @@ func (n *Node) Get(ctx context.Context, key string) (ByteView, error) {
 	switch n.limitMode {
 	case NoLimit:
 	case BlockMode:
-		n.limiter.Wait(1)
+		if err := n.limiter.Wait(ctx, 1); err != nil {
+			n.muLimiter.RUnlock()
+			return ByteView{}, err
+		}
 	case RejectMode:
-		if n.limiter.TakeAvailable(1) == 0 {
+		if n.limiter.Allow(1) {
 			n.muLimiter.RUnlock()
 			return ByteView{}, errors.New("access restricted")
 		}

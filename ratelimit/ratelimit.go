@@ -3,62 +3,74 @@ package ratelimit
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 )
 
-// RateLimiter adopts a non-goroutine approach.
-type RateLimiter struct {
-	tokens     int
-	rate       int
-	capacity   int
-	mu         sync.Mutex
-	lastRefill time.Time
+type TokenBucket struct {
+	tokens   int
+	rate     int
+	capacity int
+	mu       sync.Mutex
+	clsCh    chan struct{}
 }
 
-func NewRateLimit(rate, capacity int) *RateLimiter {
-	return &RateLimiter{
-		tokens:     capacity,
-		rate:       rate,
-		capacity:   capacity,
-		lastRefill: time.Now(),
+func New(rate, capacity int) *TokenBucket {
+	tb := &TokenBucket{
+		tokens:   capacity,
+		rate:     rate,
+		capacity: capacity,
+		clsCh:    make(chan struct{}),
 	}
-}
-func (r *RateLimiter) refill() {
-	now := time.Now()
-	elapsed := now.Sub(r.lastRefill).Seconds()
-	r.tokens += int(elapsed * float64(r.rate))
-	if r.tokens > r.capacity {
-		r.tokens = r.capacity
-	}
-	r.lastRefill = now
+	go tb.refill()
+	return tb
 }
 
-func (r *RateLimiter) Wait(ctx context.Context, tokens int) error {
+func (tb *TokenBucket) refill() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
-		r.mu.Lock()
-		if r.tokens >= tokens {
-			r.tokens -= tokens
-			r.mu.Unlock()
-			return nil
-		}
-		r.mu.Unlock()
 		select {
-		case <-ctx.Done():
-			return errors.New("wait for tokens timeout")
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
+			tb.mu.Lock()
+			tb.tokens += tb.rate
+			if tb.tokens > tb.capacity {
+				tb.tokens = tb.capacity
+			}
+			tb.mu.Unlock()
+		case <-tb.clsCh:
+			return
 		}
 	}
 }
 
-func (r *RateLimiter) Allow(tokens int) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.refill()
-	if r.tokens >= tokens {
-		r.tokens -= tokens
+func (tb *TokenBucket) Close() {
+	close(tb.clsCh)
+}
+
+func (tb *TokenBucket) Allow(tokens int) bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.tokens >= tokens {
+		tb.tokens -= tokens
 		return true
 	}
 	return false
+}
+
+func (tb *TokenBucket) Wait(ctx context.Context, tokens int) error {
+	for {
+		tb.mu.Lock()
+		if tb.tokens >= tokens {
+			tb.tokens -= tokens
+			tb.mu.Unlock()
+			return nil
+		}
+		tb.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
