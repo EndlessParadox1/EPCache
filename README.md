@@ -22,6 +22,8 @@
 │   └── lru.go: implements a lru cache.
 ├── msgctl
 │   └── msgctl.go: provides a tool for merging messages within a specified interval.
+├── ratelimit
+│   └── ratelimit.go: implements a token bucket for rate limiting.
 ├── singleflight
 │   └── singleflight.go: provides a duplicate func call suppression mechanism using Mutex and WaitGroup,
 │                          to avoid cache breakdown.
@@ -67,7 +69,7 @@ Get -----> cache hit? -----> retrun
 1. Using gRPC/ProtoBuf to achieve efficient communication between nodes: request forwarding and data synchronization.
 2. Implementing cache elimination strategy based on LRU, and implement load balancing based on consistent hashing.
 3. Use mutex and semaphore to prevent cache breakdown, Bloom filters to prevent cache penetration, 
-   and token bucket algorithm to implement request-flow limiting.
+   and token bucket algorithm to implement request rate limiting.
 4. Asynchronous data synchronization across nodes based on AMQP-style message queue
    has the advantages of order guarantee and decoupling.
 5. Implementing service registration and discovery based on etcd cluster to achieve dynamic adjustment of nodes.
