@@ -28,15 +28,14 @@ const defaultExchange = "epcache"
 type GrpcPool struct {
 	self     string
 	registry []string
-	opts     GrpcPoolOptions
-	logger   *log.Logger
-	pb.UnimplementedEPCacheServer
-
-	ch       chan *pb.SyncData
 	mqBroker string
+	opts     GrpcPoolOptions
 
-	node      *Node
+	logger    *log.Logger
+	syncCh    chan *pb.SyncData
 	dscMsgCon *msgctl.MsgController
+	node      *Node
+	pb.UnimplementedEPCacheServer
 
 	muPeers    sync.RWMutex
 	peers      *consistenthash.Map
@@ -66,12 +65,12 @@ func NewGrpcPool(self string, registry []string, mqBroker string, opts *GrpcPool
 	}
 	grpcPoolExist = true
 	gp := &GrpcPool{
-		self:       self,
-		registry:   registry,
-		mqBroker:   mqBroker,
-		logger:     log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
-		dscMsgCon:  msgctl.New(time.Second),
-		protoPeers: make(map[string]*protoPeer),
+		self:      self,
+		registry:  registry,
+		mqBroker:  mqBroker,
+		logger:    log.New(os.Stdin, "[EPCache] ", log.LstdFlags),
+		syncCh:    make(chan *pb.SyncData),
+		dscMsgCon: msgctl.New(time.Second),
 	}
 	if opts != nil {
 		gp.opts = *opts
@@ -103,7 +102,7 @@ func (gp *GrpcPool) PickPeer(key string) (ProtoPeer, bool) {
 
 // SyncAll just publishes a message to the MQ exchange working in fanout pattern.
 func (gp *GrpcPool) SyncAll(data *pb.SyncData) {
-	gp.ch <- data
+	gp.syncCh <- data
 }
 
 func (gp *GrpcPool) SetNode(node *Node) {

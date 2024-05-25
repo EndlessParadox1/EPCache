@@ -36,7 +36,7 @@ func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 	}
 	for {
 		select {
-		case data := <-gp.ch:
+		case data := <-gp.syncCh:
 			body, _ := proto.Marshal(data)
 			err = ch.Publish(
 				gp.opts.Exchange,

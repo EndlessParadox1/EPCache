@@ -101,7 +101,10 @@ func (n *Node) ResetLimiter() {
 	n.muLimiter.Lock()
 	defer n.muLimiter.Unlock()
 	n.limitMode = NoLimit
-	n.limiter = nil
+	if n.limiter != nil {
+		n.limiter.Close()
+		n.limiter = nil
+	}
 }
 
 // SetFilter sets a bloom filter, zero size for none.
