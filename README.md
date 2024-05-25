@@ -95,6 +95,8 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
   when used concurrently.
 * For 100k data entries, as short as 633 ms to complete the writing regardless of the time spent on 
   retrieving them from source.
+* For 100k data entries, as short as 595 ms to update all and publish messages related when used concurrently.
+* For 100k data entries, as short as 1.72 s to consume messages related and update all.
 
 ## License
 
