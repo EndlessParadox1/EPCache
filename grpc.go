@@ -44,8 +44,10 @@ type GrpcPool struct {
 
 // GrpcPoolOptions are options to build a GrpcPool instance.
 //
-//	Prefix: The etcd namespace to which an EPCache cluster instance belongs.
-//	Exchange: The MQ exchange used by an EPCache cluster instance.
+//		Prefix: The etcd namespace to which an EPCache cluster instance belongs, default `epcache/`.
+//		Exchange: The MQ exchange used by an EPCache cluster instance, default `epcache`.
+//	 Replicas: The replicas of each node in hash ring, default `50`.
+//	 HashFn: The hashing function used for consistent hash, default `CRC32`.
 type GrpcPoolOptions struct {
 	Prefix   string
 	Exchange string
@@ -57,8 +59,8 @@ var grpcPoolExist bool
 
 // NewGrpcPool returns a GrpcPool instance.
 //
-//		registry: The listening addresses of the etcd cluster.
-//	 mqBroker: The listening address of the MQ broker.
+//	registry: The listening addresses of the etcd cluster.
+//	mqBroker: The listening address of the MQ broker.
 func NewGrpcPool(self string, registry []string, mqBroker string, opts *GrpcPoolOptions) *GrpcPool {
 	if grpcPoolExist {
 		panic("NewGrpcPool called more than once")
@@ -166,7 +168,7 @@ func (gp *GrpcPool) run() {
 			<-sigChan
 			count++
 			if count == 1 {
-				gp.logger.Println("Shutting down gracefully...SIG again to force")
+				gp.logger.Println("Shutdown gracefully...SIG again to force")
 				cancel() // notifying some goroutines to clean up
 			} else {
 				os.Exit(1)
@@ -174,6 +176,7 @@ func (gp *GrpcPool) run() {
 		}
 	}()
 	wg.Wait() // waiting for all cleaning works to be completed
+	gp.logger.Println("Shutdown finished")
 }
 
 // startServer starts a gRPC server.

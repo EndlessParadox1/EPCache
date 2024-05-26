@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// produce publishes data-sync messages in fanout pattern to MQ.
 func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
@@ -44,21 +45,22 @@ func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 				false,
 				false,
 				amqp.Publishing{
-					ContentType: "text/plain",
+					ContentType: "application/x-protobuf",
 					AppId:       gp.self,
 					Body:        body,
 				},
 			)
 			if err != nil {
-				gp.logger.Print("failed to publish a message:", err)
+				gp.logger.Println("failed to publish a message:", err)
 			}
 		case <-ctx.Done():
 			gp.logger.Println("Data sync sender stopped")
 			return
 		}
 	}
-} // TODO
+}
 
+// consume consumes the data-sync messages from MQ and then tries to change the local cache.
 func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)
@@ -83,7 +85,7 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 	if err != nil {
 		gp.logger.Fatal("failed to declare an exchange:", err)
 	}
-	q, _err := ch.QueueDeclare(
+	q, err1 := ch.QueueDeclare(
 		"",
 		false,
 		true,
@@ -91,8 +93,8 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 		false,
 		nil,
 	)
-	if _err != nil {
-		gp.logger.Fatal("failed to declare a queue:", err)
+	if err1 != nil {
+		gp.logger.Fatal("failed to declare a queue:", err1)
 	}
 	err = ch.QueueBind(
 		q.Name,
@@ -104,21 +106,21 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 	if err != nil {
 		gp.logger.Fatal("failed to bind queue to exchange:", err)
 	}
-	msgs, err1 := ch.Consume(
+	msgCh, err2 := ch.Consume(
 		q.Name,
 		"",
 		true,
-		false,
+		true,
 		false,
 		false,
 		nil,
 	)
-	if err1 != nil {
-		gp.logger.Fatal("failed to consume messages:", err1)
+	if err2 != nil {
+		gp.logger.Fatal("failed to consume messages:", err2)
 	}
 	for {
 		select {
-		case msg := <-msgs:
+		case msg := <-msgCh:
 			if msg.AppId != gp.self {
 				atomic.AddInt64(&gp.node.Stats.PeerSyncs, 1)
 				var data pb.SyncData
@@ -135,4 +137,4 @@ func (gp *GrpcPool) consume(ctx context.Context, wg *sync.WaitGroup) {
 			return
 		}
 	}
-} // TODO
+}
