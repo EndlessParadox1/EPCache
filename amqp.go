@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// produce publishes data-sync messages in fanout pattern to MQ.
+// produce publishes data-sync messages to MQ.
 func (gp *GrpcPool) produce(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	conn, err := amqp.Dial(gp.mqBroker)

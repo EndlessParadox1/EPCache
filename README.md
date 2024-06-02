@@ -95,8 +95,8 @@ Issues and Pull Requests are accepted. Feel free to contribute to this project.
   when used concurrently.
 * For 100k data entries, as short as 633 ms to complete the writing regardless of the time spent on 
   retrieving them from source.
-* For 100k data entries, as short as 541 ms to update all and publish messages related when used concurrently.
-* For 100k data entries, as short as 1.72 s to consume messages related and update all.
+* For 100k data entries, as short as 1.77 s to complete the process of a node updating/deleting all and 
+  publishing messages related to MQ, meanwhile other nodes consuming from MQ and updating/deleting all as well.
 
 ## License
 
