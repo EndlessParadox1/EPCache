@@ -15,7 +15,7 @@ pipeline {
                 sh 'go test -v ./...'
             }
         }
-        stages('Archive') {
+        stage('Archive') {
             steps {
                 sh 'tar -czf epcache.tar.gz epcache'
                 archiveArtifacts 'epcache.tar.gz'
