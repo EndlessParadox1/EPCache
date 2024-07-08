@@ -29,7 +29,7 @@ pipeline {
         success {
             echo 'Succeeded!'
         }
-        fail {
+        failure {
             echo 'Failed'
         }
     }
