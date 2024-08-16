@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package epcachepb;
+
+option go_package = "github.com/EndlessParadox1/epcache/epcachepb";
+
+message Request {
+    string key = 1;
+}
+
+message Response {
+    bytes value = 1;
+}
+
+message SyncData {
+    string method = 1;
+    string key = 2;
+    bytes value = 3;
+}
+
+service EPCache {
+    rpc Get(Request) returns (Response);
+}
+
+// In this dir, run `protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative *.proto`
+// to get both *.pb.go and *_grpc.pb.go
